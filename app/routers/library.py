@@ -288,6 +288,26 @@ def _build_tree(entries: list) -> list:
             node = ensure(parent, os.path.basename(parent) or parent)
             node["files"].append(entry)
 
+    def ensure_ancestors(path: str) -> None:
+        drive, _ = os.path.splitdrive(path)
+        stop = os.path.normcase(drive + os.sep) if drive else os.path.normcase(os.sep)
+        current = path
+        while True:
+            parent = os.path.dirname(current)
+            if not parent or parent == current:
+                break
+            if os.path.normcase(parent) == os.path.normcase(current):
+                break
+            if parent in nodes:
+                break
+            ensure(parent, os.path.basename(parent) or parent)
+            if os.path.normcase(parent) == stop:
+                break
+            current = parent
+
+    for path in list(nodes):
+        ensure_ancestors(path)
+
     roots = []
     for path, node in nodes.items():
         parent = os.path.dirname(path)

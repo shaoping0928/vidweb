@@ -1176,7 +1176,11 @@
     if (token !== state.treeToken || !holder.isConnected) return;
     const items = state.treeFiles.get(key) || [];
     if (!items.length) {
-      holder.textContent = "（无匹配视频）";
+      if ((node.children || []).length) {
+        holder.remove();
+      } else {
+        holder.textContent = "（无匹配视频）";
+      }
       return;
     }
     const frag = document.createDocumentFragment();
