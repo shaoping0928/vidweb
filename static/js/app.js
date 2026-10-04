@@ -2264,6 +2264,7 @@
     $("#setFfprobe").value = data.ffprobe;
     $("#setTranscode").checked = !!data.transcode;
     $("#setTranscodeEncoder").value = data.transcode_encoder || "auto";
+    $("#setAccessLog").checked = !!data.access_log;
     $("#setDataDir").textContent = data.data_dir;
     $("#setConfigFile").textContent = data.config_file;
     $("#setToolStatus").textContent = data.ffmpeg_resolved
@@ -2351,6 +2352,7 @@
         ffprobe: $("#setFfprobe").value.trim(),
         transcode: $("#setTranscode").checked,
         transcode_encoder: $("#setTranscodeEncoder").value,
+        access_log: $("#setAccessLog").checked,
       });
       await refreshConfig();
       await refreshTranscodeInfo();

@@ -1,3 +1,4 @@
+import logging
 import os
 import shutil
 import subprocess
@@ -20,6 +21,7 @@ class SettingsBody(BaseModel):
     ffprobe: Optional[str] = None
     transcode: Optional[bool] = None
     transcode_encoder: Optional[str] = None
+    access_log: Optional[bool] = None
 
 
 class TestToolBody(BaseModel):
@@ -51,6 +53,7 @@ def _settings_payload() -> dict:
         "ffprobe": cfg.get("ffprobe") or "",
         "transcode": bool(cfg.get("transcode")),
         "transcode_encoder": (cfg.get("transcode_encoder") or "auto").lower(),
+        "access_log": bool(cfg.get("access_log")),
         "ffmpeg_resolved": config.ffmpeg_path() or "",
         "ffprobe_resolved": config.ffprobe_path() or "",
         "data_dir": str(config.DATA_DIR),
@@ -110,6 +113,9 @@ def update_settings(body: SettingsBody):
         if encoder not in ("auto", "nvenc", "qsv", "amf", "cpu"):
             raise HTTPException(status_code=400, detail="转码硬件取值无效")
         cfg["transcode_encoder"] = encoder
+    if body.access_log is not None:
+        cfg["access_log"] = bool(body.access_log)
+        logging.getLogger("uvicorn.access").disabled = not cfg["access_log"]
 
     config.save_config(cfg)
     return {

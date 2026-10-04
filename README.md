@@ -43,6 +43,7 @@ python run.py
 | `ffmpeg` / `ffprobe` | `""` | 可执行文件或所在目录，空 = PATH 查找 |
 | `transcode` | `false` | 是否启用服务端转码 |
 | `transcode_encoder` | `auto` | 硬件编码器：`auto` / `nvenc` / `qsv` / `amf` / `cpu` |
+| `access_log` | `false` | 是否在控制台输出访问日志（每个请求一行），设置页可即时开关 |
 
 ## 目录结构
 

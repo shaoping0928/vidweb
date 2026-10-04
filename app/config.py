@@ -24,6 +24,7 @@ DEFAULTS = {
     "ffprobe": "",
     "transcode": False,
     "transcode_encoder": "auto",
+    "access_log": False,
 }
 
 
