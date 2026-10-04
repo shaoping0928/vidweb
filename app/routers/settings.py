@@ -18,6 +18,7 @@ class SettingsBody(BaseModel):
     allowed_roots: Optional[list] = None
     ffmpeg: Optional[str] = None
     ffprobe: Optional[str] = None
+    transcode: Optional[bool] = None
 
 
 class TestToolBody(BaseModel):
@@ -47,6 +48,7 @@ def _settings_payload() -> dict:
         "effective_roots": [str(p) for p in config.allowed_roots()],
         "ffmpeg": cfg.get("ffmpeg") or "",
         "ffprobe": cfg.get("ffprobe") or "",
+        "transcode": bool(cfg.get("transcode")),
         "ffmpeg_resolved": config.ffmpeg_path() or "",
         "ffprobe_resolved": config.ffprobe_path() or "",
         "data_dir": str(config.DATA_DIR),
@@ -99,6 +101,8 @@ def update_settings(body: SettingsBody):
         cfg["ffmpeg"] = body.ffmpeg.strip()
     if body.ffprobe is not None:
         cfg["ffprobe"] = body.ffprobe.strip()
+    if body.transcode is not None:
+        cfg["transcode"] = bool(body.transcode)
 
     config.save_config(cfg)
     return {

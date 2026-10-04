@@ -22,6 +22,7 @@ DEFAULTS = {
     "library_dirs": [],
     "ffmpeg": "",
     "ffprobe": "",
+    "transcode": False,
 }
 
 

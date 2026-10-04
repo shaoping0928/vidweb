@@ -1821,6 +1821,7 @@
     $("#setPort").value = data.port;
     $("#setFfmpeg").value = data.ffmpeg;
     $("#setFfprobe").value = data.ffprobe;
+    $("#setTranscode").checked = !!data.transcode;
     $("#setDataDir").textContent = data.data_dir;
     $("#setConfigFile").textContent = data.config_file;
     $("#setToolStatus").textContent = data.ffmpeg_resolved
@@ -1868,6 +1869,7 @@
         allowed_roots: state.settingRoots,
         ffmpeg: $("#setFfmpeg").value.trim(),
         ffprobe: $("#setFfprobe").value.trim(),
+        transcode: $("#setTranscode").checked,
       });
       await refreshConfig();
       await loadDrives();

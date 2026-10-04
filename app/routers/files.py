@@ -98,6 +98,34 @@ def stream(path: str, request: Request):
     )
 
 
+BROWSER_VIDEO_CODECS = {"h264", "vp8", "vp9", "av1"}
+BROWSER_AUDIO_CODECS = {"aac", "mp3", "opus", "vorbis", "flac"}
+BROWSER_CONTAINERS = {"mov,mp4,m4a,3gp,3g2,mj2", "webm"}
+
+
+@router.get("/files/probe")
+def probe_file(path: str):
+    real = safe_path(path)
+    info = media_info.streams(str(real)) or {}
+    video = info.get("video", "")
+    audio = info.get("audio", "")
+    container = info.get("container", "")
+    if not (video or audio or container):
+        return {"video": "", "audio": "", "profile": "", "container": "", "playable": None}
+    playable = (
+        video in BROWSER_VIDEO_CODECS
+        and (not audio or audio in BROWSER_AUDIO_CODECS)
+        and container in BROWSER_CONTAINERS
+    )
+    return {
+        "video": video,
+        "audio": audio,
+        "profile": info.get("profile", ""),
+        "container": container,
+        "playable": playable,
+    }
+
+
 @router.get("/files/detail")
 def detail(path: str):
     real = safe_path(path)
@@ -134,6 +162,9 @@ def detail(path: str):
         result["thumbnail"] = thumb
         if record and record["thumbnail"] != thumb:
             db.set_thumbnail(record["id"], thumb)
+    from ..services import transcode
+
+    result["transcoded"] = transcode.cached(str(real)) or ""
     return result
 
 

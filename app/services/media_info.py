@@ -133,3 +133,30 @@ def probe(path: str):
     if info:
         return info
     return _probe_mp4(path)
+
+
+def streams(path: str):
+    tool = config.ffprobe_path()
+    if not tool or not path or not os.path.exists(path):
+        return None
+    cmd = [
+        tool, "-v", "error",
+        "-show_entries", "stream=codec_type,codec_name,profile:format=format_name",
+        "-of", "json", path,
+    ]
+    try:
+        proc = _run(cmd)
+        if proc.returncode != 0:
+            return None
+        data = json.loads(proc.stdout.decode("utf-8", "replace") or "{}")
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    result = {"container": (data.get("format") or {}).get("format_name", ""), "video": "", "audio": "", "profile": ""}
+    for stream in data.get("streams") or []:
+        kind = stream.get("codec_type")
+        if kind == "video" and not result["video"]:
+            result["video"] = stream.get("codec_name", "")
+            result["profile"] = stream.get("profile", "")
+        elif kind == "audio" and not result["audio"]:
+            result["audio"] = stream.get("codec_name", "")
+    return result

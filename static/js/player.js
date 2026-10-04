@@ -32,6 +32,8 @@
     previewTimer: null,
     previewBucket: -1,
     ffmpegOn: false,
+    transcodeOn: false,
+    transcodeJob: null,
     panelTab: "info",
     el: {},
 
@@ -42,8 +44,10 @@
       try {
         const appConfig = await API.get("/api/config");
         this.ffmpegOn = !!appConfig.ffmpeg;
+        this.transcodeOn = !!appConfig.transcode;
       } catch (e) {
         this.ffmpegOn = false;
+        this.transcodeOn = false;
       }
       const ids = [
         "video", "subtitleOverlay", "playerOsd", "playerHeader", "playerTitle",
@@ -150,8 +154,43 @@
       });
       video.addEventListener("seeked", () => this.resetDanmaku());
       video.addEventListener("ended", () => this.onEnded());
-      video.addEventListener("error", () => {
-        if (this.paths[this.index]) this.showOsd("播放失败：浏览器可能不支持该视频编码");
+      video.addEventListener("error", async () => {
+        const path = this.paths[this.index];
+        if (!path) return;
+        if (this.transcodeOn) {
+          try {
+            const cache = await API.get("/api/transcode/cache", { path: path });
+            if (cache.cached && this.paths[this.index] === path) {
+              this.playTranscoded(path, cache.path);
+              return;
+            }
+          } catch (e) {}
+        }
+        let detail = "";
+        let playable = null;
+        try {
+          const info = await API.get("/api/files/probe", { path: path });
+          playable = info.playable;
+          const parts = [];
+          if (info.video) parts.push("视频 " + info.video.toUpperCase());
+          if (info.audio) parts.push("音频 " + info.audio.toUpperCase());
+          if (info.container) parts.push("容器 " + info.container.split(",")[0]);
+          detail = parts.join(" / ");
+        } catch (e) {}
+        if (playable === false) {
+          if (this.transcodeOn) {
+            this.showOsd("浏览器不支持该编码（" + detail + "），开始转码…");
+            this.startTranscodeTask(path);
+          } else {
+            this.showOsd("浏览器不支持该编码（" + detail + "），可在设置中开启服务端转码");
+          }
+          return;
+        }
+        if (playable === null) {
+          this.showOsd("播放失败：文件可能损坏或不完整");
+          return;
+        }
+        this.showOsd("播放失败，请稍后重试" + (detail ? "（" + detail + "）" : ""));
       });
 
       const track = el.progressTrack;
@@ -238,6 +277,13 @@
         if (token !== this.loadToken) return;
         this.currentDetail = detail;
         this.renderInfoPanel(detail);
+        if (this.transcodeOn && detail.transcoded && this.paths[this.index] === path) {
+          this.resumeApplied = false;
+          this.pendingResume = detail.record ? detail.record.last_position_ms : 0;
+          this.el.video.src = API.streamUrl(detail.transcoded);
+          this.el.video.play().catch(() => {});
+          return;
+        }
         if (detail.record && detail.record.last_position_ms > 0) {
           this.pendingResume = detail.record.last_position_ms;
           this.maybeResume();
@@ -288,6 +334,59 @@
       const video = this.el.video;
       if (video.paused) video.play().catch(() => {});
       else video.pause();
+    },
+
+    playTranscoded(path, cachedPath) {
+      if (this.paths[this.index] !== path) return;
+      const pos = this.el.video.currentTime || 0;
+      this.resumeApplied = false;
+      this.pendingResume = Math.round(pos * 1000);
+      this.el.video.src = API.streamUrl(cachedPath);
+      this.el.video.play().catch(() => {});
+      this.showOsd("已切换到转码版本播放");
+    },
+
+    async startTranscodeTask(path) {
+      if (this.transcodeJob) return;
+      let jobId;
+      try {
+        const res = await API.post("/api/transcode", { path: path });
+        jobId = res.job_id;
+      } catch (e) {
+        this.showOsd("转码启动失败：" + e.message);
+        return;
+      }
+      this.transcodeJob = jobId;
+      const self = this;
+      const name = String(path).split(/[\\/]/).pop();
+      Tasks.run({
+        title: "转码：" + name,
+        tooltip: path,
+        poll: async () => {
+          const st = await API.get("/api/transcode/status", { job_id: jobId });
+          if (st.state === "running") {
+            return {
+              state: "running",
+              percent: st.progress || 0,
+              text: "转码中 " + Math.round(st.progress || 0) + "%",
+            };
+          }
+          if (st.state === "done") return { state: "done", percent: 100, text: "切换播放…" };
+          if (st.state === "cancelled") return { state: "cancelled", percent: 100, text: "已取消" };
+          return { state: "error", percent: null, text: "转码失败：" + (st.error || "") };
+        },
+        onFinish: async (status) => {
+          self.transcodeJob = null;
+          if (status.state !== "done") return null;
+          try {
+            const cache = await API.get("/api/transcode/cache", { path: path });
+            if (cache.cached) self.playTranscoded(path, cache.path);
+          } catch (e) {}
+          return "转码完成";
+        },
+        onCancel: () =>
+          API.post("/api/transcode/cancel", { job_id: jobId }).catch(() => {}),
+      });
     },
 
     seekRelative(ms) {

@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from . import config, db
-from .routers import browse, comments, dirs, files, library, recent, screenshots, search, settings, state, tags, tasks, thumbs
+from .routers import browse, comments, dirs, files, library, recent, screenshots, search, settings, state, tags, tasks, thumbs, transcode
 
 MINIMAL_HTML = """
 <!DOCTYPE html>
@@ -50,6 +50,7 @@ app.include_router(tasks.router)
 app.include_router(state.router)
 app.include_router(dirs.router)
 app.include_router(screenshots.router)
+app.include_router(transcode.router)
 
 
 @app.get("/api/config")
@@ -60,6 +61,7 @@ def app_config():
         "ffmpeg": bool(config.ffmpeg_path()),
         "ffprobe": bool(config.ffprobe_path()),
         "ffmpeg_path": config.ffmpeg_path() or "",
+        "transcode": bool(config.load_config().get("transcode")),
         "roots": [str(root) for root in config.allowed_roots()],
         "data_dir": str(config.DATA_DIR),
         "default_m3u": str(config.PLAYLIST_DIR / "playlist.m3u"),
