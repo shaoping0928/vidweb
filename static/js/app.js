@@ -1775,6 +1775,7 @@
     } catch (e) {
       return;
     }
+    if (window.Player) window.Player.transcodeOn = !!state.config.transcode;
     const banner = $("#ffmpegBanner");
     if (!state.config.ffmpeg) {
       banner.textContent =

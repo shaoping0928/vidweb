@@ -157,6 +157,10 @@
       video.addEventListener("error", async () => {
         const path = this.paths[this.index];
         if (!path) return;
+        try {
+          const cfg = await API.get("/api/config");
+          this.transcodeOn = !!cfg.transcode;
+        } catch (e) {}
         if (this.transcodeOn) {
           try {
             const cache = await API.get("/api/transcode/cache", { path: path });
