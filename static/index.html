@@ -16,6 +16,7 @@
       <button class="tab" data-tab="search">搜索</button>
       <button class="tab" data-tab="tags">标签</button>
       <button class="tab" data-tab="player">播放</button>
+      <button class="tab" data-tab="tasks">任务</button>
       <button class="tab" data-tab="settings">设置</button>
     </nav>
   </header>
@@ -107,6 +108,7 @@
             </select>
           </div>
           <button id="plResetFilters">重置筛选</button>
+          <button id="plRestore" title="把数据库中已入库的视频全部加入播放列表">从媒体库恢复</button>
         </aside>
         <div class="splitter" data-resize-target="libFilters" data-min="170" data-max="480" title="拖动调整宽度，双击恢复默认"></div>
         <div class="list-col">
@@ -135,6 +137,16 @@
         <span class="label" id="tagSummary"></span>
       </div>
       <ul id="tagManageList" class="list grow"></ul>
+    </section>
+
+    <section id="page-tasks" class="page">
+      <div class="toolbar">
+        <button id="tasksRefresh">刷新</button>
+        <span class="spacer"></span>
+        <span class="label" id="tasksSummary"></span>
+      </div>
+      <ul id="taskList" class="list grow"></ul>
+      <div class="pager" id="tasksPager"></div>
     </section>
 
     <section id="page-settings" class="page">
@@ -348,9 +360,11 @@
 </div>
 
 <input type="file" id="subtitleFileInput" accept=".srt,.ass,.ssa,.vtt" class="hidden">
+<div id="taskPanel" class="hidden"></div>
 <div id="modalRoot"></div>
 
 <script src="/js/api.js"></script>
+<script src="/js/tasks.js"></script>
 <script src="/js/app.js"></script>
 <script src="/js/player.js"></script>
 </body>

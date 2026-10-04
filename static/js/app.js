@@ -6,18 +6,22 @@
 
   const state = {
     tab: "path",
-    path: localStorage.getItem("mw/lastPath") || "",
-    onlyVideo: localStorage.getItem("mw/onlyVideo") === "true",
-    sort: parseInt(localStorage.getItem("mw/sort") || "0", 10) || 0,
+    path: "",
+    onlyVideo: false,
+    sort: 0,
     dirs: [],
     entries: [],
-    playlist: JSON.parse(localStorage.getItem("mw/playlist") || "[]"),
+    playlist: [],
     playlistInfo: {},
     visiblePaths: [],
+    playlistTotal: 0,
+    playlistFiltered: 0,
+    playlistOffset: 0,
+    playlistLoading: false,
     libFilters: loadLibFilters(),
     tags: [],
     tagSubtrees: new Map(),
-    tagExpanded: JSON.parse(localStorage.getItem("mw/tagExpanded") || "{}"),
+    tagExpanded: {},
     config: {},
     detailPath: "",
     searchItems: [],
@@ -29,18 +33,19 @@
     settingRoots: [],
     roots: [],
     parent: "",
-    pages: { fileList: 1, playlist: 1, recent: 1, search: 1 },
+    pages: { fileList: 1, playlist: 1, recent: 1, search: 1, tasks: 1 },
+    taskItems: [],
   };
 
   const PAGE_SIZES = [10, 20, 30, 50, 100];
 
   function pageSize() {
-    const value = parseInt(localStorage.getItem("mw/pageSize") || "30", 10);
+    const value = parseInt(Prefs.get("mw/pageSize", "30"), 10);
     return PAGE_SIZES.includes(value) ? value : 30;
   }
 
   function setPageSize(value) {
-    localStorage.setItem("mw/pageSize", String(value));
+    Prefs.set("mw/pageSize", value);
   }
 
   function paginate(total, page, size) {
@@ -49,14 +54,24 @@
     return { start: (current - 1) * size, page: current, totalPages };
   }
 
-  function renderPager(selector, key, total, rerender) {
+  function renderPager(selector, key, total, rerender, serverMode) {
     const box = $(selector);
     if (!box) return;
     box.innerHTML = "";
     if (!total) return;
     const size = pageSize();
-    const { page, totalPages } = paginate(total, state.pages[key], size);
-    state.pages[key] = page;
+    let page;
+    let totalPages;
+    if (serverMode) {
+      totalPages = Math.max(1, Math.ceil(total / size));
+      page = Math.min(Math.max(1, state.pages[key] || 1), totalPages);
+      state.pages[key] = page;
+    } else {
+      const info = paginate(total, state.pages[key], size);
+      page = info.page;
+      totalPages = info.totalPages;
+      state.pages[key] = page;
+    }
     const info = document.createElement("span");
     info.className = "pager-info";
     info.textContent = "共 " + total + " 条";
@@ -97,7 +112,7 @@
 
   function rerenderAllLists() {
     renderFileList();
-    renderPlaylist();
+    refreshPlaylistView();
     renderRecentList();
     renderSearchList();
     if (window.Player && window.Player.renderPlaylistPanel) window.Player.renderPlaylistPanel();
@@ -111,7 +126,7 @@
       const max = Number(splitter.dataset.max || 640);
       const invert = splitter.dataset.invert === "true";
       const key = "mw/split/" + splitter.dataset.resizeTarget;
-      const saved = parseInt(localStorage.getItem(key) || "0", 10);
+      const saved = parseInt(Prefs.get(key, "0"), 10);
       if (saved >= min && saved <= max) target.style.width = saved + "px";
       let dragging = false;
       let startX = 0;
@@ -140,7 +155,7 @@
         try {
           splitter.releasePointerCapture(e.pointerId);
         } catch (err) {}
-        localStorage.setItem(key, String(Math.round(target.getBoundingClientRect().width)));
+        Prefs.set(key, Math.round(target.getBoundingClientRect().width));
         if (target.id === "playerPanel" && window.Player && window.Player.resetDanmaku) {
           window.Player.resetDanmaku();
         }
@@ -149,7 +164,7 @@
       splitter.addEventListener("pointercancel", finish);
       splitter.addEventListener("dblclick", () => {
         target.style.width = "";
-        localStorage.removeItem(key);
+        Prefs.remove(key);
       });
     });
   }
@@ -217,7 +232,15 @@
   }
 
   function saveTagExpanded() {
-    localStorage.setItem("mw/tagExpanded", JSON.stringify(state.tagExpanded));
+    Prefs.setJSON("mw/tagExpanded", state.tagExpanded);
+  }
+
+  function applyPrefs() {
+    state.path = Prefs.get("mw/lastPath", "");
+    state.onlyVideo = Prefs.get("mw/onlyVideo", "false") === "true";
+    state.sort = parseInt(Prefs.get("mw/sort", "0"), 10) || 0;
+    state.libFilters = loadLibFilters();
+    state.tagExpanded = Prefs.getJSON("mw/tagExpanded", {});
   }
 
   function loadLibFilters() {
@@ -229,16 +252,12 @@
       tagMode: "any",
       tagNames: [],
     };
-    try {
-      const saved = JSON.parse(localStorage.getItem("mw/libFilters") || "{}");
-      return Object.assign(defaults, saved);
-    } catch (e) {
-      return defaults;
-    }
+    const saved = Prefs.getJSON("mw/libFilters", {});
+    return Object.assign(defaults, saved || {});
   }
 
   function saveLibFilters() {
-    localStorage.setItem("mw/libFilters", JSON.stringify(state.libFilters));
+    Prefs.setJSON("mw/libFilters", state.libFilters);
   }
 
   function restoreLibFilterUI() {
@@ -267,6 +286,7 @@
     $$("#tabs .tab").forEach((btn) => btn.classList.toggle("active", btn.dataset.tab === name));
     $$(".page").forEach((page) => page.classList.toggle("active", page.id === "page-" + name));
     if (name === "tags") renderTagManagePage();
+    if (name === "tasks") renderTasksPage();
     if (name === "settings") loadSettings();
     if (name === "player") setDetailVisible(false);
   }
@@ -614,7 +634,7 @@
       $("#pathInput").value = data.path;
       syncDriveSelect(data.path);
       updatePathUp();
-      localStorage.setItem("mw/lastPath", data.path);
+      Prefs.set("mw/lastPath", data.path);
       renderFileList();
     } catch (e) {
       UI.toast("打开目录失败: " + e.message);
@@ -624,6 +644,11 @@
   function renderFileList() {
     const list = $("#fileList");
     list.innerHTML = "";
+    if (!state.entries.length) {
+      list.appendChild(makeEmptyHint("此目录没有可显示的文件"));
+      renderPager("#fileListPager", "fileList", 0, renderFileList);
+      return;
+    }
     const size = pageSize();
     const { start } = paginate(state.entries.length, state.pages.fileList, size);
     state.pages.fileList = paginate(state.entries.length, state.pages.fileList, size).page;
@@ -673,7 +698,7 @@
 
   async function loadLibraryDirs() {
     try {
-      const data = await API.get("/api/library/dirs");
+      const data = await API.get("/api/dirs");
       state.dirs = data.items;
       renderDirList();
     } catch (e) {
@@ -688,7 +713,8 @@
       const li = document.createElement("li");
       li.className = "entry" + (item.exists ? "" : " missing");
       li.dataset.path = item.path;
-      li.title = item.path + (item.exists ? "" : "\n目录不存在");
+      li.dataset.id = item.id;
+      li.title = item.path + (item.exists ? "" : "\n目录不存在") + "\n右键可编辑路径 / 扫描入库";
       const name = document.createElement("span");
       name.className = "entry-name";
       name.textContent = item.path;
@@ -699,7 +725,7 @@
 
   async function addLibraryDir(path) {
     try {
-      const data = await API.post("/api/library/dirs", { path });
+      const data = await API.post("/api/dirs", { path });
       state.dirs = data.items;
       renderDirList();
     } catch (e) {
@@ -707,15 +733,23 @@
     }
   }
 
+  function selectedDir() {
+    for (const path of state.selectedPaths) {
+      const found = state.dirs.find((d) => d.path === path);
+      if (found) return found;
+    }
+    return null;
+  }
+
   async function removeLibraryDir() {
-    const selected = state.selectedPaths.filter((p) => state.dirs.some((d) => d.path === p));
-    const target = selected.length ? selected[0] : null;
+    const target = selectedDir();
     if (!target) {
       UI.alert("请先在路径库列表中选择要移除的目录");
       return;
     }
+    if (!(await UI.confirm("确定从路径库移除「" + target.path + "」吗？已入库的文件会保留。"))) return;
     try {
-      const data = await API.post("/api/library/dirs/remove", { path: target });
+      const data = await API.del("/api/dirs/" + target.id);
       state.dirs = data.items;
       renderDirList();
     } catch (e) {
@@ -723,164 +757,362 @@
     }
   }
 
-  async function scanDir(path) {
+  async function editLibraryDir(dirId, currentPath) {
+    const value = await UI.prompt(
+      "编辑目录绝对路径（可用于文件迁移后重新指向）",
+      currentPath
+    );
+    if (!value || !value.trim()) return;
+    try {
+      const data = await API.put("/api/dirs/" + dirId, { path: value.trim() });
+      state.dirs = data.items;
+      renderDirList();
+      await refreshPlaylistView();
+      UI.toast("目录已更新，同步文件 " + data.moved_files + " 个");
+    } catch (e) {
+      UI.alert(e.message);
+    }
+  }
+
+  async function startScan(body, titlePath) {
+    let jobId;
+    try {
+      const res = await API.post("/api/scan", body);
+      jobId = res.job_id;
+    } catch (e) {
+      UI.alert(e.message);
+      return;
+    }
+    Tasks.run({
+      title: "扫描入库：" + basename(titlePath),
+      tooltip: titlePath,
+      poll: async () => {
+        const st = await API.get("/api/scan/status", { job_id: jobId });
+        if (st.state === "walking") {
+          return { state: "running", percent: null, text: "正在遍历目录..." };
+        }
+        if (st.state === "importing") {
+          return {
+            state: "running",
+            percent: st.total ? (st.processed / st.total) * 100 : 0,
+            text: "已入库 " + st.processed + "/" + st.total + "（新增 " + st.added + "）",
+          };
+        }
+        if (st.state === "done") {
+          return { state: "done", percent: 100, text: "正在加入列表..." };
+        }
+        if (st.state === "cancelled") {
+          return { state: "cancelled", percent: 100, text: "已取消" };
+        }
+        return { state: "error", percent: null, text: "失败：" + (st.error || "未知错误") };
+      },
+      onFinish: async (status) => {
+        if (status.state !== "done") return null;
+        const full = await API.get("/api/scan/status", { job_id: jobId });
+        const addedToPlaylist = full.playlist_added || 0;
+        if (addedToPlaylist) {
+          await refreshPlaylistView(true);
+          setTab("lib");
+        }
+        if (state.tab === "tasks") renderTasksPage();
+        const message =
+          "完成：共 " + full.total + " 个，新增入库 " + full.added + " 个，加入列表 " + addedToPlaylist + " 个";
+        UI.toast(message);
+        return message;
+      },
+      onCancel: () => API.post("/api/scan/cancel", { job_id: jobId }).catch(() => {}),
+    });
+  }
+
+  function scanDirPath(path) {
     if (!path) {
       UI.alert("请先在路径库列表中选择目录");
       return;
     }
+    startScan({ path: path }, path);
+  }
+
+  function scanDirId(dir) {
+    if (!dir || !dir.id) {
+      UI.alert("请先在路径库列表中选择目录");
+      return;
+    }
+    startScan({ dir_id: dir.id }, dir.path);
+  }
+
+  /* ------------------------------------------------------------ tasks page */
+
+  const TASK_STATES = {
+    walking: { label: "遍历中", cls: "running" },
+    importing: { label: "入库中", cls: "running" },
+    done: { label: "完成", cls: "done" },
+    error: { label: "失败", cls: "error" },
+    cancelled: { label: "已取消", cls: "" },
+  };
+
+  let tasksTimer = null;
+
+  async function renderTasksPage() {
+    let data;
     try {
-      UI.toast("正在扫描...");
-      const data = await API.post("/api/scan", { path });
-      const existing = new Set(state.playlist.map(pathKey));
-      let added = 0;
-      let skipped = 0;
-      for (const file of data.files || []) {
-        const key = pathKey(file);
-        if (existing.has(key)) {
-          skipped++;
-          continue;
-        }
-        existing.add(key);
-        state.playlist.push(file);
-        added++;
+      data = await API.get("/api/tasks");
+    } catch (e) {
+      UI.toast(e.message);
+      return;
+    }
+    state.taskItems = data.items || [];
+    renderTaskList();
+    clearTimeout(tasksTimer);
+    if (state.taskItems.some((t) => t.state === "walking" || t.state === "importing")) {
+      tasksTimer = setTimeout(() => {
+        if (state.tab === "tasks") renderTasksPage();
+      }, 2000);
+    }
+  }
+
+  function formatTaskDuration(task) {
+    const end = task.finished_at || Math.floor(Date.now() / 1000);
+    const seconds = Math.max(0, end - (task.created_at || end));
+    if (seconds < 60) return seconds + "s";
+    const minutes = Math.floor(seconds / 60);
+    return minutes + "m " + (seconds % 60) + "s";
+  }
+
+  function makeTaskRow(task) {
+    const li = document.createElement("li");
+    li.className = "task-hist";
+    const top = document.createElement("div");
+    top.className = "task-hist-top";
+    const running = task.state === "walking" || task.state === "importing";
+    const stateInfo = TASK_STATES[task.state] || { label: task.state || "-", cls: "" };
+    const name = document.createElement("span");
+    name.className = "task-hist-name";
+    name.textContent = task.name || task.type || "任务";
+    const badge = document.createElement("span");
+    badge.className = "state-badge " + stateInfo.cls;
+    badge.textContent = stateInfo.label;
+    const time = document.createElement("span");
+    time.className = "task-hist-time";
+    time.textContent =
+      Fmt.dateTime(task.created_at) + " · " + (running ? "进行中 " + formatTaskDuration(task) : formatTaskDuration(task));
+    const ip = document.createElement("span");
+    ip.className = "task-hist-ip";
+    ip.textContent = task.ip || "-";
+    const del = document.createElement("button");
+    del.className = "task-hist-del";
+    del.textContent = "删除";
+    del.addEventListener("click", async () => {
+      try {
+        await API.del("/api/tasks/" + task.id);
+        await renderTasksPage();
+      } catch (e) {
+        UI.alert(e.message);
       }
-      savePlaylistLocal();
-      await refreshPlaylistView();
-      setTab("lib");
+    });
+    top.append(name, badge, time, ip, del);
+
+    const bottom = document.createElement("div");
+    bottom.className = "task-hist-bottom";
+    const mini = document.createElement("div");
+    mini.className = "mini-bar" + (task.state === "walking" ? " indeterminate" : "");
+    const fill = document.createElement("div");
+    fill.className = "fill";
+    const pct = task.total ? Math.round((task.processed / task.total) * 100) : task.state === "done" ? 100 : 0;
+    fill.style.width = pct + "%";
+    mini.appendChild(fill);
+    const pctText = document.createElement("span");
+    pctText.className = "task-hist-pct";
+    pctText.textContent =
+      task.state === "walking" ? "..." : task.state === "done" ? "100%" : pct + "%";
+    const desc = document.createElement("span");
+    desc.className = "task-hist-desc";
+    let descText = task.description || "";
+    if (task.error) descText += (descText ? " · " : "") + task.error;
+    desc.textContent = descText;
+    desc.title = descText;
+    bottom.append(mini, pctText, desc);
+
+    li.append(top, bottom);
+    return li;
+  }
+
+  function renderTaskList() {
+    const list = $("#taskList");
+    if (!list) return;
+    list.innerHTML = "";
+    $("#tasksSummary").textContent = state.taskItems.length
+      ? "共 " + state.taskItems.length + " 条任务"
+      : "暂无任务";
+    if (!state.taskItems.length) {
+      list.appendChild(makeEmptyHint("暂无任务记录，扫描入库后这里会显示任务历史"));
+      renderPager("#tasksPager", "tasks", 0, renderTaskList);
+      return;
+    }
+    const size = pageSize();
+    const { start } = paginate(state.taskItems.length, state.pages.tasks, size);
+    state.pages.tasks = paginate(state.taskItems.length, state.pages.tasks, size).page;
+    for (const task of state.taskItems.slice(start, start + size)) {
+      list.appendChild(makeTaskRow(task));
+    }
+    renderPager("#tasksPager", "tasks", state.taskItems.length, renderTaskList);
+  }
+
+  /* ------------------------------------------------------------ playlist */
+
+  async function loadServerPlaylist() {
+    try {
+      const data = await API.get("/api/playlist");
+      const serverPaths = data.items || [];
+      if (serverPaths.length) return;
+      const localPaths = Prefs.getJSON("playlist", []);
+      if (localPaths.length) {
+        await API.put("/api/playlist", { paths: localPaths });
+      }
+    } catch (e) {}
+  }
+
+  function makeEmptyHint(text, actionLabel, action) {
+    const li = document.createElement("li");
+    li.className = "empty-hint";
+    const label = document.createElement("div");
+    label.textContent = text;
+    li.appendChild(label);
+    if (actionLabel && action) {
+      const btn = document.createElement("button");
+      btn.className = "primary";
+      btn.textContent = actionLabel;
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        action();
+      });
+      li.appendChild(btn);
+    }
+    return li;
+  }
+
+  async function restorePlaylistFromDb() {
+    try {
+      const res = await API.post("/api/playlist/restore");
+      await refreshPlaylistView(true);
       UI.toast(
-        "扫描到视频 " + data.count + " 个，新增 " + added + " 个" +
-          (skipped ? "（重复 " + skipped + " 个已跳过）" : "")
+        res.added
+          ? "已从媒体库恢复 " + res.added + " 个视频"
+          : "媒体库视频已全部在播放列表中"
       );
     } catch (e) {
       UI.alert(e.message);
     }
   }
 
-  /* ------------------------------------------------------------ playlist */
+  function resetLibFilters() {
+    state.libFilters = {
+      search: "",
+      status: "all",
+      duration: "all",
+      sort: "name",
+      tagMode: "any",
+      tagNames: [],
+    };
+    saveLibFilters();
+    restoreLibFilterUI();
+    renderLibTagList();
+    refreshPlaylistView(true);
+  }
 
-  function savePlaylistLocal() {
-    localStorage.setItem("mw/playlist", JSON.stringify(state.playlist));
+  function selectedTagIds() {
+    const nameToId = new Map(state.tags.map((t) => [t.name, t.id]));
+    return (state.libFilters.tagNames || [])
+      .map((name) => nameToId.get(name))
+      .filter((id) => id !== undefined);
+  }
+
+  function playlistQueryBody(extra) {
+    return Object.assign(
+      {
+        search: state.libFilters.search || "",
+        status: state.libFilters.status || "all",
+        duration: state.libFilters.duration || "all",
+        tag_ids: selectedTagIds(),
+        tag_match_all: state.libFilters.tagMode === "all",
+        sort: state.libFilters.sort || "name",
+      },
+      extra || {}
+    );
+  }
+
+  async function fetchFilteredPaths() {
+    const data = await API.post(
+      "/api/playlist/query",
+      playlistQueryBody({ paths_only: true })
+    );
+    return data.paths || [];
   }
 
   async function addFilesToPlaylist(paths) {
-    const existing = new Set(state.playlist.map(pathKey));
-    let changed = false;
-    for (const path of paths || []) {
-      const key = pathKey(path);
-      if (!path || !key || existing.has(key)) continue;
-      existing.add(key);
-      state.playlist.push(path);
-      changed = true;
-    }
-    if (changed) {
-      savePlaylistLocal();
-      await refreshPlaylistView();
+    if (!paths || !paths.length) return 0;
+    try {
+      const res = await API.post("/api/playlist/add", { paths });
+      if (res.added) await refreshPlaylistView();
+      return res.added;
+    } catch (e) {
+      UI.alert(e.message);
+      return 0;
     }
   }
 
-  async function refreshPlaylistView() {
-    if (!state.playlist.length) {
-      state.visiblePaths = [];
-      state.playlistInfo = {};
-      renderPlaylist();
-      return;
-    }
+  async function refreshPlaylistView(resetPage) {
+    if (resetPage) state.pages.playlist = 1;
+    const size = pageSize();
+    state.playlistLoading = true;
     try {
-      const info = await API.post("/api/files/info", { paths: state.playlist });
+      const data = await API.post(
+        "/api/playlist/query",
+        playlistQueryBody({
+          offset: (state.pages.playlist - 1) * size,
+          limit: size,
+        })
+      );
       state.playlistInfo = {};
-      info.items.forEach((item) => {
+      (data.items || []).forEach((item) => {
         state.playlistInfo[item.path] = item;
       });
-      state.visiblePaths = applyLibFilters(state.playlist, state.playlistInfo);
-      renderPlaylist();
+      state.visiblePaths = (data.items || []).map((item) => item.path);
+      state.playlistOffset = data.offset || 0;
+      state.playlistTotal = data.total || 0;
+      state.playlistFiltered = data.filtered || 0;
     } catch (e) {
-      UI.toast("播放列表刷新失败: " + e.message);
+      state.visiblePaths = [];
+      state.playlistTotal = 0;
+      state.playlistFiltered = 0;
+      UI.toast("播放列表加载失败: " + e.message);
+    } finally {
+      state.playlistLoading = false;
     }
+    renderPlaylist();
   }
 
   const collator = new Intl.Collator("zh-Hans-CN", { sensitivity: "base", numeric: true });
 
-  function applyLibFilters(paths, info) {
-    const filters = state.libFilters;
-    const keyword = (filters.search || "").trim().toLowerCase();
-    const tagNames = filters.tagNames || [];
-    const tagModeAll = filters.tagMode === "all";
-    let list = paths.filter((path) => {
-      const item = info[path] || {};
-      const name = item.name || basename(path);
-      if (keyword && !name.toLowerCase().includes(keyword)) return false;
-      const exists = item.exists !== false;
-      if (filters.status === "missing") return !exists;
-      if (!exists) return false;
-      if (filters.status === "new" && (item.play_count || 0) > 0) return false;
-      if (filters.status === "played" && (item.play_count || 0) <= 0) return false;
-      if (filters.status === "progress" && !(item.last_position_ms > 0)) return false;
-      const duration = item.duration_ms || 0;
-      if (filters.duration === "unknown" && duration > 0) return false;
-      if (filters.duration === "short" && !(duration > 0 && duration <= 600000)) return false;
-      if (filters.duration === "medium" && !(duration > 600000 && duration <= 1800000)) return false;
-      if (filters.duration === "long" && !(duration > 1800000)) return false;
-      if (tagNames.length) {
-        const nameToId = new Map(state.tags.map((t) => [t.name, t.id]));
-        const ownIds = new Set(
-          (item.tags || []).map((name) => nameToId.get(name)).filter((id) => id !== undefined)
-        );
-        const matchOne = (name) => {
-          const id = nameToId.get(name);
-          if (id === undefined) return false;
-          const subtree = state.tagSubtrees.get(id);
-          if (!subtree) return ownIds.has(id);
-          for (const own of ownIds) {
-            if (subtree.has(own)) return true;
-          }
-          return false;
-        };
-        const hit = tagModeAll ? tagNames.every(matchOne) : tagNames.some(matchOne);
-        if (!hit) return false;
-      }
-      return true;
-    });
-    const by = filters.sort;
-    const metric = (path) => {
-      const item = info[path] || {};
-      switch (by) {
-        case "recent":
-          return item.last_played_at || 0;
-        case "plays":
-          return item.play_count || 0;
-        case "duration":
-          return item.duration_ms || 0;
-        case "size":
-          return item.size || 0;
-        case "mtime":
-          return item.mtime || 0;
-        default:
-          return 0;
-      }
-    };
-    list = list.slice();
-    if (by === "name" || by === "name_desc") {
-      list.sort((a, b) =>
-        collator.compare(
-          (info[a] || {}).name || basename(a),
-          (info[b] || {}).name || basename(b)
-        )
-      );
-      if (by === "name_desc") list.reverse();
-    } else {
-      list.sort((a, b) => metric(b) - metric(a));
-    }
-    return list;
-  }
-
   function renderPlaylist() {
     const list = $("#playlistView");
     list.innerHTML = "";
-    const size = pageSize();
-    const { start } = paginate(state.visiblePaths.length, state.pages.playlist, size);
-    state.pages.playlist = paginate(state.visiblePaths.length, state.pages.playlist, size).page;
-    state.visiblePaths.slice(start, start + size).forEach((path, offset) => {
-      const index = start + offset;
+    if (state.playlistLoading) {
+      list.appendChild(makeEmptyHint("正在加载播放列表..."));
+      return;
+    }
+    if (!state.playlistFiltered) {
+      const filtered = state.playlistTotal > 0;
+      list.appendChild(
+        makeEmptyHint(
+          filtered ? "当前筛选条件下没有视频" : "视频库为空",
+          filtered ? "重置筛选" : "从媒体库恢复",
+          filtered ? resetLibFilters : restorePlaylistFromDb
+        )
+      );
+      renderPager("#playlistPager", "playlist", 0, refreshPlaylistView, true);
+      return;
+    }
+    state.visiblePaths.forEach((path, offset) => {
       const info = state.playlistInfo[path] || {};
       const tags = info.tags || [];
       let subtitle = tags.length ? "标签: " + tags.join(", ") : path;
@@ -894,27 +1126,43 @@
         missing: info.exists === false,
         hasThumb: info.has_thumb,
       });
-      li.dataset.index = index;
+      if (info.rel_path) {
+        li.title =
+          path +
+          "\n相对路径: " +
+          info.rel_path +
+          (info.dir_path ? "\n目录: " + info.dir_path : "");
+      }
+      li.dataset.index = state.playlistOffset + offset;
       list.appendChild(li);
     });
-    renderPager("#playlistPager", "playlist", state.visiblePaths.length, renderPlaylist);
+    renderPager("#playlistPager", "playlist", state.playlistFiltered, refreshPlaylistView, true);
   }
 
   async function removeFromPlaylist(paths) {
-    const remove = new Set(paths);
-    state.playlist = state.playlist.filter((p) => !remove.has(p));
-    savePlaylistLocal();
-    await refreshPlaylistView();
+    try {
+      await API.post("/api/playlist/remove", { paths });
+      await refreshPlaylistView();
+    } catch (e) {
+      UI.alert(e.message);
+    }
   }
 
   async function cleanPlaylist() {
     try {
-      const info = await API.post("/api/files/info", { paths: state.playlist });
-      const existing = new Set(info.items.filter((i) => i.exists).map((i) => i.path));
-      state.playlist = state.playlist.filter((p) => existing.has(p));
-      savePlaylistLocal();
+      const res = await API.post("/api/playlist/clean");
       await refreshPlaylistView();
-      UI.toast("已移除失效项");
+      UI.toast("已移除失效项 " + res.removed + " 个");
+    } catch (e) {
+      UI.alert(e.message);
+    }
+  }
+
+  async function clearPlaylist() {
+    if (!(await UI.confirm("确定清空播放列表吗？"))) return;
+    try {
+      await API.del("/api/playlist");
+      await refreshPlaylistView();
     } catch (e) {
       UI.alert(e.message);
     }
@@ -1000,7 +1248,7 @@
           );
         }
         saveLibFilters();
-        refreshPlaylistView();
+        refreshPlaylistView(true);
       });
       box.appendChild(label);
       if (hasChildren && expanded) {
@@ -1407,6 +1655,11 @@
   function renderRecentList() {
     const list = $("#recentList");
     list.innerHTML = "";
+    if (!state.recentItems.length) {
+      list.appendChild(makeEmptyHint("暂无播放记录"));
+      renderPager("#recentPager", "recent", 0, renderRecentList);
+      return;
+    }
     const size = pageSize();
     const { start } = paginate(state.recentItems.length, state.pages.recent, size);
     state.pages.recent = paginate(state.recentItems.length, state.pages.recent, size).page;
@@ -1452,6 +1705,13 @@
   function renderSearchList() {
     const list = $("#searchList");
     list.innerHTML = "";
+    if (!state.searchItems.length) {
+      if ($("#searchInput").value.trim()) {
+        list.appendChild(makeEmptyHint("没有匹配的结果"));
+      }
+      renderPager("#searchPager", "search", 0, renderSearchList);
+      return;
+    }
     const size = pageSize();
     const { start } = paginate(state.searchItems.length, state.pages.search, size);
     state.pages.search = paginate(state.searchItems.length, state.pages.search, size).page;
@@ -1472,14 +1732,22 @@
   /* ------------------------------------------------------------ m3u */
 
   async function exportM3u() {
-    if (!state.playlist.length) {
+    let paths = [];
+    try {
+      const data = await API.get("/api/playlist");
+      paths = data.items || [];
+    } catch (e) {
+      UI.alert(e.message);
+      return;
+    }
+    if (!paths.length) {
       UI.alert("播放列表为空");
       return;
     }
     const file = await UI.prompt("保存 m3u 到（服务器路径）", state.config.default_m3u || "playlist.m3u");
     if (!file) return;
     try {
-      const res = await API.post("/api/playlist/save", { file, paths: state.playlist });
+      const res = await API.post("/api/playlist/save", { file, paths });
       UI.toast("已保存: " + res.file);
     } catch (e) {
       UI.alert(e.message);
@@ -1577,12 +1845,7 @@
   }
 
   function loadPlayerDefaults() {
-    let defaults = {};
-    try {
-      defaults = JSON.parse(localStorage.getItem("mw/defaults") || "{}");
-    } catch (e) {
-      defaults = {};
-    }
+    const defaults = Prefs.getJSON("mw/defaults", {});
     return {
       volume: defaults.volume !== undefined ? Number(defaults.volume) : 80,
       speed: defaults.speed !== undefined ? Number(defaults.speed) : 10,
@@ -1643,12 +1906,12 @@
       danmaku: $("#setDanmaku").checked,
       danmakuSpeed: Number($("#setDanmakuSpeed").value),
     };
-    localStorage.setItem("mw/defaults", JSON.stringify(defaults));
-    localStorage.setItem("mw/volume", String(defaults.volume));
-    localStorage.setItem("mw/speed", String(defaults.speed));
-    localStorage.setItem("mw/mode", String(defaults.mode));
-    localStorage.setItem("mw/danmaku", defaults.danmaku ? "1" : "0");
-    localStorage.setItem("mw/danmakuSpeed", String(defaults.danmakuSpeed));
+    Prefs.setJSON("mw/defaults", defaults);
+    Prefs.set("mw/volume", defaults.volume);
+    Prefs.set("mw/speed", defaults.speed);
+    Prefs.set("mw/mode", defaults.mode);
+    Prefs.set("mw/danmaku", defaults.danmaku ? "1" : "0");
+    Prefs.set("mw/danmakuSpeed", defaults.danmakuSpeed);
     UI.toast("播放器默认值已保存");
   }
 
@@ -1721,13 +1984,13 @@
     $("#onlyVideo").checked = state.onlyVideo;
     $("#onlyVideo").addEventListener("change", () => {
       state.onlyVideo = $("#onlyVideo").checked;
-      localStorage.setItem("mw/onlyVideo", state.onlyVideo ? "true" : "false");
+      Prefs.set("mw/onlyVideo", state.onlyVideo ? "true" : "false");
       browse(state.path);
     });
     $("#sortSelect").value = String(state.sort);
     $("#sortSelect").addEventListener("change", () => {
       state.sort = parseInt($("#sortSelect").value, 10) || 0;
-      localStorage.setItem("mw/sort", String(state.sort));
+      Prefs.set("mw/sort", String(state.sort));
       browse(state.path);
     });
 
@@ -1737,12 +2000,12 @@
     });
     $("#libRemoveDir").addEventListener("click", removeLibraryDir);
     $("#libScan").addEventListener("click", () => {
-      const selected = state.selectedPaths.find((p) => state.dirs.some((d) => d.path === p));
+      const selected = selectedDir();
       if (!selected) {
         UI.alert("请先在路径库列表中选择目录");
         return;
       }
-      scanDir(selected);
+      scanDirId(selected);
     });
 
     $("#fileList").addEventListener("click", (e) => {
@@ -1767,7 +2030,7 @@
         showMenu(e.clientX, e.clientY, [
           { label: "进入文件夹", onClick: () => browse(path) },
           { label: "添加为库目录", onClick: () => addLibraryDir(path) },
-          { label: "扫描入库", onClick: () => scanDir(path) },
+          { label: "扫描入库", onClick: () => scanDirPath(path) },
           { label: "在资源管理器中显示", onClick: () => explore(path) },
           "-",
           { label: "刷新", onClick: () => browse(state.path) },
@@ -1809,9 +2072,11 @@
       const li = e.target.closest("li.entry");
       if (!li) return;
       const path = li.dataset.path;
+      const dirId = parseInt(li.dataset.id, 10);
       showMenu(e.clientX, e.clientY, [
         { label: "进入", onClick: () => browse(path) },
-        { label: "扫描入库", onClick: () => scanDir(path) },
+        { label: "扫描入库", onClick: () => scanDirId({ id: dirId, path }) },
+        { label: "编辑路径...", onClick: () => editLibraryDir(dirId, path) },
         { label: "移除", onClick: removeLibraryDir },
         { label: "在资源管理器中显示", onClick: () => explore(path) },
       ]);
@@ -1823,31 +2088,34 @@
       handleItemClick(e, $("#playlistView"), state.visiblePaths, li);
       if (!e.ctrlKey && !e.shiftKey) showDetailsFor(li.dataset.path);
     });
-    $("#playlistView").addEventListener("dblclick", (e) => {
+    $("#playlistView").addEventListener("dblclick", async (e) => {
       const li = e.target.closest("li.media-item");
       if (!li) return;
       const index = parseInt(li.dataset.index, 10);
-      if (state.visiblePaths.length) Player.open(state.visiblePaths, index);
+      const paths = await fetchFilteredPaths();
+      if (paths.length) Player.open(paths, index);
     });
     $("#playlistView").addEventListener("contextmenu", (e) => {
       e.preventDefault();
       const li = e.target.closest("li.media-item");
       if (!li) return;
       const path = li.dataset.path;
+      const index = parseInt(li.dataset.index, 10);
       const selected = selectedOr(path);
       showMenu(e.clientX, e.clientY, [
-        { label: "播放", onClick: () => Player.open(state.visiblePaths, parseInt(li.dataset.index, 10)) },
+        {
+          label: "播放",
+          onClick: async () => {
+            const paths = await fetchFilteredPaths();
+            if (paths.length) Player.open(paths, index);
+          },
+        },
         { label: "编辑标签...", enabled: selected.length > 0, onClick: () => editTags(selected) },
         { label: "查看详情", onClick: () => showDetailsInPanel(path) },
         { label: "生成缩略图", enabled: selected.length > 0, onClick: () => requestThumbs(selected) },
         { label: "从列表移除", enabled: selected.length > 0, onClick: () => removeFromPlaylist(selected) },
-        { label: "清空列表", enabled: state.playlist.length > 0, onClick: async () => {
-            if (!(await UI.confirm("确定清空播放列表吗？"))) return;
-            state.playlist = [];
-            savePlaylistLocal();
-            await refreshPlaylistView();
-          } },
-        { label: "移除失效项", enabled: state.playlist.length > 0, onClick: cleanPlaylist },
+        { label: "清空列表", enabled: state.playlistTotal > 0, onClick: clearPlaylist },
+        { label: "移除失效项", enabled: state.playlistTotal > 0, onClick: cleanPlaylist },
         "-",
         { label: "导出 m3u", onClick: exportM3u },
         { label: "导入 m3u", onClick: importM3u },
@@ -1933,53 +2201,42 @@
       libFilterTimer = setTimeout(() => {
         state.libFilters.search = $("#plSearch").value;
         saveLibFilters();
-        refreshPlaylistView();
+        refreshPlaylistView(true);
       }, 200);
     });
     $$('input[name="plStatus"]').forEach((radio) =>
       radio.addEventListener("change", () => {
         state.libFilters.status = radio.value;
         saveLibFilters();
-        refreshPlaylistView();
+        refreshPlaylistView(true);
       })
     );
     $$('input[name="plDuration"]').forEach((radio) =>
       radio.addEventListener("change", () => {
         state.libFilters.duration = radio.value;
         saveLibFilters();
-        refreshPlaylistView();
+        refreshPlaylistView(true);
       })
     );
     $$('input[name="plTagMode"]').forEach((radio) =>
       radio.addEventListener("change", () => {
         state.libFilters.tagMode = radio.value;
         saveLibFilters();
-        refreshPlaylistView();
+        refreshPlaylistView(true);
       })
     );
     $("#plSort").addEventListener("change", () => {
       state.libFilters.sort = $("#plSort").value;
       saveLibFilters();
-      refreshPlaylistView();
+      refreshPlaylistView(true);
     });
-    $("#plResetFilters").addEventListener("click", () => {
-      state.libFilters = {
-        search: "",
-        status: "all",
-        duration: "all",
-        sort: "name",
-        tagMode: "any",
-        tagNames: [],
-      };
-      saveLibFilters();
-      restoreLibFilterUI();
-      renderLibTagList();
-      refreshPlaylistView();
-    });
+    $("#plResetFilters").addEventListener("click", resetLibFilters);
+    $("#plRestore").addEventListener("click", restorePlaylistFromDb);
     $("#tagCreate").addEventListener("click", createTag);
     $("#tagNewName").addEventListener("keydown", (e) => {
       if (e.key === "Enter") createTag();
     });
+    $("#tasksRefresh").addEventListener("click", renderTasksPage);
 
     $("#recentRefresh").addEventListener("click", refreshRecent);
     $("#recentClear").addEventListener("click", async () => {
@@ -2040,6 +2297,8 @@
   /* ------------------------------------------------------------ init */
 
   async function init() {
+    await Prefs.load();
+    applyPrefs();
     await refreshConfig();
     bindEvents();
     initSplitters();
@@ -2047,8 +2306,9 @@
     await refreshTagFilter();
     await loadLibraryDirs();
     await loadDrives();
+    await loadServerPlaylist();
     await browse(state.path);
-    await refreshPlaylistView();
+    await refreshPlaylistView(true);
     setTab("path");
   }
 

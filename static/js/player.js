@@ -27,9 +27,10 @@
     panelPage: 1,
     el: {},
 
-    init() {
+    async init() {
       if (this.initialized) return;
       this.initialized = true;
+      if (window.Prefs && window.Prefs.load) await window.Prefs.load();
       const ids = [
         "video", "subtitleOverlay", "playerOsd", "playerHeader", "playerTitle",
         "playerStage", "playerMain", "playerBody", "playerPanel", "playerPlaylistView", "playerBack",
@@ -44,23 +45,18 @@
         this.el[id] = document.getElementById(id);
       });
       this.el.playerPage = document.getElementById("page-player");
-      let defaults = {};
-      try {
-        defaults = JSON.parse(localStorage.getItem("mw/defaults") || "{}");
-      } catch (e) {
-        defaults = {};
-      }
-      const modeRaw = localStorage.getItem("mw/mode");
+      const defaults = window.Prefs ? Prefs.getJSON("mw/defaults", {}) : {};
+      const modeRaw = window.Prefs ? Prefs.get("mw/mode", null) : null;
       this.mode = modeRaw !== null ? parseInt(modeRaw, 10) || 0 : parseInt(defaults.mode, 10) || 0;
-      const volumeRaw = localStorage.getItem("mw/volume");
+      const volumeRaw = window.Prefs ? Prefs.get("mw/volume", null) : null;
       this.el.volume.value =
         volumeRaw !== null ? volumeRaw : String(defaults.volume !== undefined ? defaults.volume : 80);
-      const speedRaw = localStorage.getItem("mw/speed");
+      const speedRaw = window.Prefs ? Prefs.get("mw/speed", null) : null;
       this.el.speed.value =
         speedRaw !== null ? speedRaw : String(defaults.speed !== undefined ? defaults.speed : 10);
-      const danmakuRaw = localStorage.getItem("mw/danmaku");
+      const danmakuRaw = window.Prefs ? Prefs.get("mw/danmaku", null) : null;
       this.danmakuOn = danmakuRaw !== null ? danmakuRaw === "1" : defaults.danmaku !== false;
-      const danmakuSpeedRaw = localStorage.getItem("mw/danmakuSpeed");
+      const danmakuSpeedRaw = window.Prefs ? Prefs.get("mw/danmakuSpeed", null) : null;
       this.danmakuCross =
         parseInt(danmakuSpeedRaw || String(defaults.danmakuSpeed || 8000), 10) || 8000;
       this.el.btnDanmaku.textContent = this.danmakuOn ? "弹幕: 开" : "弹幕: 关";
@@ -95,11 +91,11 @@
       });
       el.volume.addEventListener("input", () => {
         this.applyVolume();
-        localStorage.setItem("mw/volume", el.volume.value);
+        if (window.Prefs) Prefs.set("mw/volume", el.volume.value);
       });
       el.speed.addEventListener("input", () => {
         this.applySpeed();
-        localStorage.setItem("mw/speed", el.speed.value);
+        if (window.Prefs) Prefs.set("mw/speed", el.speed.value);
       });
       el.subtitleFileInput.addEventListener("change", () => {
         const file = el.subtitleFileInput.files[0];
@@ -328,7 +324,7 @@
     },
 
     playlistPageSize() {
-      const value = parseInt(localStorage.getItem("mw/pageSize") || "30", 10);
+      const value = parseInt(window.Prefs ? Prefs.get("mw/pageSize", "30") : "30", 10);
       return [10, 20, 30, 50, 100].includes(value) ? value : 30;
     },
 
@@ -386,7 +382,7 @@
         sizeSelect.appendChild(option);
       }
       sizeSelect.addEventListener("change", () => {
-        localStorage.setItem("mw/pageSize", String(sizeSelect.value));
+        if (window.Prefs) Prefs.set("mw/pageSize", sizeSelect.value);
         this.panelPage = Math.floor(this.index / this.playlistPageSize()) + 1;
         this.renderPlaylistPanel();
         this.updatePlaylistSelection();
@@ -544,7 +540,7 @@
 
     cycleMode() {
       this.mode = (this.mode + 1) % 4;
-      localStorage.setItem("mw/mode", String(this.mode));
+      if (window.Prefs) Prefs.set("mw/mode", this.mode);
       this.updateModeButton();
     },
 
@@ -562,7 +558,7 @@
     setVolume(value) {
       this.el.volume.value = Math.min(100, Math.max(0, value));
       this.applyVolume();
-      localStorage.setItem("mw/volume", this.el.volume.value);
+      if (window.Prefs) Prefs.set("mw/volume", this.el.volume.value);
     },
 
     toggleMute() {
@@ -611,7 +607,7 @@
 
     setDanmaku(on) {
       this.danmakuOn = !!on;
-      localStorage.setItem("mw/danmaku", this.danmakuOn ? "1" : "0");
+      if (window.Prefs) Prefs.set("mw/danmaku", this.danmakuOn ? "1" : "0");
       this.el.btnDanmaku.textContent = this.danmakuOn ? "弹幕: 开" : "弹幕: 关";
       if (this.danmakuOn) this.resetDanmaku();
       else this.clearDanmaku();

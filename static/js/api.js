@@ -121,5 +121,102 @@ const Fmt = {
   },
 };
 
+const Prefs = {
+  data: {},
+  ready: null,
+  _MIGRATE_KEYS: [
+    ["mw/playlist", "playlist"],
+    ["mw/libFilters", "mw/libFilters"],
+    ["mw/tagExpanded", "mw/tagExpanded"],
+    ["mw/pageSize", "mw/pageSize"],
+    ["mw/volume", "mw/volume"],
+    ["mw/speed", "mw/speed"],
+    ["mw/mode", "mw/mode"],
+    ["mw/danmaku", "mw/danmaku"],
+    ["mw/danmakuSpeed", "mw/danmakuSpeed"],
+    ["mw/defaults", "mw/defaults"],
+    ["mw/lastPath", "mw/lastPath"],
+    ["mw/onlyVideo", "mw/onlyVideo"],
+    ["mw/sort", "mw/sort"],
+  ],
+  load() {
+    if (!this.ready) {
+      this.ready = (async () => {
+        try {
+          const res = await API.get("/api/state");
+          this.data = res.items || {};
+        } catch (e) {
+          this.data = {};
+        }
+        await this._migrate();
+      })();
+    }
+    return this.ready;
+  },
+  async _migrate() {
+    const updates = {};
+    for (const pair of this._MIGRATE_KEYS) {
+      const localKey = pair[0];
+      const stateKey = pair[1];
+      let local = null;
+      try {
+        local = localStorage.getItem(localKey);
+      } catch (e) {}
+      if (local !== null) {
+        if (this.data[stateKey] === undefined) updates[stateKey] = local;
+        try {
+          localStorage.removeItem(localKey);
+        } catch (e) {}
+      }
+    }
+    const splitKeys = [];
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith("mw/split/")) splitKeys.push(key);
+      }
+    } catch (e) {}
+    for (const key of splitKeys) {
+      const local = localStorage.getItem(key);
+      if (this.data[key] === undefined) updates[key] = local;
+      try {
+        localStorage.removeItem(key);
+      } catch (e) {}
+    }
+    if (Object.keys(updates).length) {
+      Object.assign(this.data, updates);
+      try {
+        await API.put("/api/state", { items: updates });
+      } catch (e) {}
+    }
+  },
+  get(key, fallback) {
+    const value = this.data[key];
+    return value === undefined || value === null ? fallback : value;
+  },
+  getJSON(key, fallback) {
+    const raw = this.get(key, undefined);
+    if (raw === undefined || raw === "") return fallback;
+    try {
+      return JSON.parse(raw);
+    } catch (e) {
+      return fallback;
+    }
+  },
+  set(key, value) {
+    const text = String(value);
+    this.data[key] = text;
+    API.put("/api/state", { key: key, value: text }).catch(() => {});
+  },
+  setJSON(key, value) {
+    this.set(key, JSON.stringify(value));
+  },
+  remove(key) {
+    delete this.data[key];
+    API.del("/api/state/" + encodeURIComponent(key)).catch(() => {});
+  },
+};
+
 window.API = API;
 window.Fmt = Fmt;
+window.Prefs = Prefs;

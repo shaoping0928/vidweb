@@ -1,3 +1,5 @@
+import json
+import os
 import sqlite3
 import time
 from contextlib import contextmanager
@@ -55,6 +57,101 @@ def init_db() -> None:
                 "ALTER TABLE tags ADD COLUMN parent_id INTEGER REFERENCES tags(id) ON DELETE SET NULL"
             )
             conn.execute("PRAGMA user_version = 3")
+            version = 3
+        if version < 4:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS tasks ("
+                "  id INTEGER PRIMARY KEY,"
+                "  job_id TEXT UNIQUE,"
+                "  type TEXT,"
+                "  name TEXT,"
+                "  description TEXT,"
+                "  ip TEXT,"
+                "  state TEXT,"
+                "  total INTEGER DEFAULT 0,"
+                "  processed INTEGER DEFAULT 0,"
+                "  added INTEGER DEFAULT 0,"
+                "  error TEXT,"
+                "  created_at INTEGER DEFAULT 0,"
+                "  updated_at INTEGER DEFAULT 0,"
+                "  finished_at INTEGER DEFAULT 0"
+                ")"
+            )
+            conn.execute("PRAGMA user_version = 4")
+            version = 4
+        if version < 5:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS app_state ("
+                "  key TEXT PRIMARY KEY,"
+                "  value TEXT"
+                ")"
+            )
+            conn.execute("PRAGMA user_version = 5")
+            version = 5
+        if version < 6:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS dirs ("
+                "  id INTEGER PRIMARY KEY,"
+                "  path TEXT UNIQUE"
+                ")"
+            )
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS playlist ("
+                "  id INTEGER PRIMARY KEY,"
+                "  dir_id INTEGER,"
+                "  rel_path TEXT,"
+                "  UNIQUE(dir_id, rel_path)"
+                ")"
+            )
+            conn.execute("ALTER TABLE files ADD COLUMN dir_id INTEGER")
+            conn.execute("ALTER TABLE files ADD COLUMN rel_path TEXT")
+            try:
+                configured = config.load_config().get("library_dirs") or []
+            except Exception:
+                configured = []
+            for item in configured:
+                item = str(item).strip()
+                if item:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO dirs(path) VALUES(?)",
+                        (os.path.abspath(item),),
+                    )
+            dir_rows = [
+                {"id": row["id"], "path": row["path"]}
+                for row in conn.execute("SELECT id, path FROM dirs")
+            ]
+            if dir_rows:
+                for row in conn.execute(
+                    "SELECT id, path FROM files WHERE dir_id IS NULL"
+                ).fetchall():
+                    dir_id, rel = _match_dir(row["path"], dir_rows)
+                    if dir_id:
+                        conn.execute(
+                            "UPDATE files SET dir_id = ?, rel_path = ? WHERE id = ?",
+                            (dir_id, rel, row["id"]),
+                        )
+            state_row = conn.execute(
+                "SELECT value FROM app_state WHERE key = 'playlist'"
+            ).fetchone()
+            if state_row and state_row["value"]:
+                try:
+                    legacy_paths = json.loads(state_row["value"])
+                except ValueError:
+                    legacy_paths = []
+                if isinstance(legacy_paths, list):
+                    for item in legacy_paths:
+                        item = str(item)
+                        if not item.strip():
+                            continue
+                        dir_id, rel = _match_dir(item, dir_rows)
+                        conn.execute(
+                            "INSERT OR IGNORE INTO playlist(dir_id, rel_path) VALUES(?,?)",
+                            (dir_id, rel),
+                        )
+                conn.execute(
+                    "UPDATE app_state SET value = '[]' WHERE key = 'playlist'"
+                )
+            conn.execute("PRAGMA user_version = 6")
         conn.commit()
     finally:
         conn.close()
@@ -88,6 +185,31 @@ def ensure_file(path: str) -> int:
             (path, name, size, mtime, _now()),
         )
         return cur.lastrowid
+
+
+def ensure_files_batch(paths) -> int:
+    added = 0
+    with connection() as conn:
+        for path in paths:
+            p = Path(path)
+            try:
+                st = p.stat()
+                name, size, mtime = p.name, st.st_size, int(st.st_mtime)
+            except OSError:
+                name, size, mtime = p.name, 0, 0
+            row = conn.execute("SELECT id FROM files WHERE path = ?", (path,)).fetchone()
+            if row:
+                conn.execute(
+                    "UPDATE files SET name = ?, size = ?, mtime = ? WHERE id = ?",
+                    (name, size, mtime, row["id"]),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO files(path, name, size, mtime, added_at) VALUES(?,?,?,?,?)",
+                    (path, name, size, mtime, _now()),
+                )
+                added += 1
+    return added
 
 
 def file_by_path(path: str):
@@ -421,3 +543,369 @@ def comment_count(file_id: int) -> int:
             "SELECT COUNT(*) AS n FROM comments WHERE file_id = ?", (file_id,)
         ).fetchone()
         return row["n"]
+
+# ---------------------------------------------------------------- tasks
+
+_TASK_FIELDS = {"state", "total", "processed", "added", "error", "description", "name"}
+
+
+def create_task(job_id: str, task_type: str, name: str, description: str, ip: str) -> int:
+    with connection() as conn:
+        cur = conn.execute(
+            "INSERT INTO tasks(job_id, type, name, description, ip, state,"
+            " created_at, updated_at) VALUES(?,?,?,?,?,?,?,?)",
+            (job_id, task_type, name, description, ip, "walking", _now(), _now()),
+        )
+        return cur.lastrowid
+
+
+def update_task(job_id: str, **fields) -> None:
+    updates = {k: v for k, v in fields.items() if k in _TASK_FIELDS}
+    if not updates:
+        return
+    sets = ", ".join(f"{key} = ?" for key in updates)
+    values = list(updates.values()) + [_now(), job_id]
+    with connection() as conn:
+        conn.execute(f"UPDATE tasks SET {sets}, updated_at = ? WHERE job_id = ?", values)
+
+
+def finish_task(job_id: str, state: str, error: str = "", processed=None, added=None) -> None:
+    now = _now()
+    with connection() as conn:
+        conn.execute(
+            "UPDATE tasks SET state = ?, error = ?, processed = COALESCE(?, processed),"
+            " added = COALESCE(?, added), updated_at = ?, finished_at = ? WHERE job_id = ?",
+            (state, error, processed, added, now, now, job_id),
+        )
+
+
+def list_tasks(limit: int = 100) -> list:
+    with connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM tasks ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def remove_task(task_id: int) -> bool:
+    if task_id <= 0:
+        return False
+    with connection() as conn:
+        conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+        return True
+
+
+# ---------------------------------------------------------------- app state
+
+def get_state(key: str):
+    with connection() as conn:
+        row = conn.execute("SELECT value FROM app_state WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else None
+
+
+def set_state(key: str, value: str) -> None:
+    with connection() as conn:
+        conn.execute(
+            "INSERT INTO app_state(key, value) VALUES(?, ?)"
+            " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
+
+
+def set_state_many(items: dict) -> None:
+    with connection() as conn:
+        for key, value in items.items():
+            conn.execute(
+                "INSERT INTO app_state(key, value) VALUES(?, ?)"
+                " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (str(key), str(value)),
+            )
+
+
+def get_all_state() -> dict:
+    with connection() as conn:
+        rows = conn.execute("SELECT key, value FROM app_state").fetchall()
+        return {row["key"]: row["value"] for row in rows}
+
+
+def remove_state(key: str) -> bool:
+    with connection() as conn:
+        conn.execute("DELETE FROM app_state WHERE key = ?", (key,))
+        return True
+
+
+def all_files(limit: int = 20000) -> list:
+    with connection() as conn:
+        rows = conn.execute(
+            "SELECT path FROM files ORDER BY name LIMIT ?", (limit,)
+        ).fetchall()
+        return [r["path"] for r in rows]
+
+
+def tag_subtree_ids(tag_id: int) -> set:
+    if tag_id <= 0:
+        return set()
+    with connection() as conn:
+        return _tag_subtree_ids(conn, tag_id)
+
+
+# ---------------------------------------------------------------- dirs & playlist
+
+def path_key(path: str) -> str:
+    return os.path.normcase(os.path.normpath(os.path.abspath(str(path))))
+
+
+def _match_dir(path: str, dirs: list):
+    if not dirs:
+        return None, str(path)
+    target = os.path.abspath(str(path))
+    norm = os.path.normcase(os.path.normpath(target))
+    best = None
+    best_len = -1
+    for item in dirs:
+        base = os.path.abspath(str(item["path"]))
+        base_norm = os.path.normcase(os.path.normpath(base))
+        if norm == base_norm:
+            rel = ""
+        elif norm.startswith(base_norm + os.sep):
+            rel = os.path.relpath(target, base)
+        else:
+            continue
+        if len(base_norm) > best_len:
+            best = (int(item["id"]), rel)
+            best_len = len(base_norm)
+    return best if best else (None, str(path))
+
+
+def dirs_list() -> list:
+    with connection() as conn:
+        rows = conn.execute("SELECT id, path FROM dirs ORDER BY path").fetchall()
+        return [
+            {"id": row["id"], "path": row["path"], "exists": os.path.isdir(row["path"])}
+            for row in rows
+        ]
+
+
+def dir_by_id(dir_id: int):
+    with connection() as conn:
+        row = conn.execute("SELECT id, path FROM dirs WHERE id = ?", (dir_id,)).fetchone()
+        if not row:
+            return None
+        return {"id": row["id"], "path": row["path"], "exists": os.path.isdir(row["path"])}
+
+
+def dir_add(path: str) -> int:
+    real = os.path.abspath(str(path))
+    with connection() as conn:
+        for row in conn.execute("SELECT id, path FROM dirs"):
+            if os.path.normcase(row["path"]) == os.path.normcase(real):
+                return row["id"]
+        cur = conn.execute("INSERT INTO dirs(path) VALUES(?)", (real,))
+        return cur.lastrowid
+
+
+def dir_update_path(dir_id: int, new_path: str) -> int:
+    new_abs = os.path.abspath(str(new_path))
+    moved = 0
+    with connection() as conn:
+        row = conn.execute("SELECT path FROM dirs WHERE id = ?", (dir_id,)).fetchone()
+        if not row:
+            return 0
+        conn.execute("UPDATE dirs SET path = ? WHERE id = ?", (new_abs, dir_id))
+        for file_row in conn.execute(
+            "SELECT id, rel_path FROM files WHERE dir_id = ?", (dir_id,)
+        ).fetchall():
+            rel = file_row["rel_path"] or ""
+            target = os.path.normpath(os.path.join(new_abs, rel)) if rel else new_abs
+            conflict = conn.execute(
+                "SELECT id FROM files WHERE path = ? AND id <> ?",
+                (target, file_row["id"]),
+            ).fetchone()
+            if conflict:
+                conn.execute("DELETE FROM files WHERE id = ?", (file_row["id"],))
+                continue
+            conn.execute(
+                "UPDATE files SET path = ? WHERE id = ?", (target, file_row["id"])
+            )
+            moved += 1
+    return moved
+
+
+def dir_remove(dir_id: int) -> int:
+    detached = 0
+    with connection() as conn:
+        row = conn.execute("SELECT path FROM dirs WHERE id = ?", (dir_id,)).fetchone()
+        base = row["path"] if row else None
+        for entry in conn.execute(
+            "SELECT id, rel_path FROM playlist WHERE dir_id = ?", (dir_id,)
+        ).fetchall():
+            rel = entry["rel_path"] or ""
+            abs_path = os.path.normpath(os.path.join(base, rel)) if base and rel else rel
+            conn.execute(
+                "UPDATE playlist SET dir_id = NULL, rel_path = ? WHERE id = ?",
+                (abs_path, entry["id"]),
+            )
+            detached += 1
+        conn.execute("UPDATE files SET dir_id = NULL WHERE dir_id = ?", (dir_id,))
+        conn.execute("DELETE FROM dirs WHERE id = ?", (dir_id,))
+    return detached
+
+
+def backfill_file_dirs() -> int:
+    dir_list = dirs_list()
+    if not dir_list:
+        return 0
+    updated = 0
+    with connection() as conn:
+        rows = conn.execute(
+            "SELECT id, path FROM files WHERE dir_id IS NULL"
+        ).fetchall()
+        for row in rows:
+            dir_id, rel = _match_dir(row["path"], dir_list)
+            if dir_id:
+                conn.execute(
+                    "UPDATE files SET dir_id = ?, rel_path = ? WHERE id = ?",
+                    (dir_id, rel, row["id"]),
+                )
+                updated += 1
+    return updated
+
+
+def ensure_files_rel_batch(dir_id, rel_paths) -> int:
+    base = None
+    if dir_id:
+        record = dir_by_id(dir_id)
+        base = record["path"] if record else None
+    added = 0
+    with connection() as conn:
+        for rel in rel_paths:
+            rel = str(rel)
+            abs_path = os.path.normpath(os.path.join(base, rel)) if base and rel else rel
+            p = Path(abs_path)
+            try:
+                st = p.stat()
+                name, size, mtime = p.name, st.st_size, int(st.st_mtime)
+            except OSError:
+                name, size, mtime = p.name, 0, 0
+            row = conn.execute("SELECT id FROM files WHERE path = ?", (abs_path,)).fetchone()
+            if row:
+                conn.execute(
+                    "UPDATE files SET name = ?, size = ?, mtime = ?, dir_id = ?, rel_path = ?"
+                    " WHERE id = ?",
+                    (name, size, mtime, dir_id, rel, row["id"]),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO files(path, name, size, mtime, added_at, dir_id, rel_path)"
+                    " VALUES(?,?,?,?,?,?,?)",
+                    (abs_path, name, size, mtime, _now(), dir_id, rel),
+                )
+                added += 1
+    return added
+
+
+def _entry_resolved(row) -> str:
+    if row["dir_id"] and row["dir_path"]:
+        rel = row["rel_path"] or ""
+        return os.path.normpath(os.path.join(row["dir_path"], rel)) if rel else row["dir_path"]
+    return row["rel_path"] or ""
+
+
+def playlist_entries() -> list:
+    with connection() as conn:
+        rows = conn.execute(
+            "SELECT p.id, p.dir_id, p.rel_path, d.path AS dir_path FROM playlist p"
+            " LEFT JOIN dirs d ON d.id = p.dir_id ORDER BY p.id"
+        ).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "dir_id": row["dir_id"],
+                "rel_path": row["rel_path"] or "",
+                "dir_path": row["dir_path"],
+                "path": _entry_resolved(row),
+            }
+            for row in rows
+        ]
+
+
+def playlist_paths() -> list:
+    return [entry["path"] for entry in playlist_entries()]
+
+
+def playlist_add(paths: list) -> int:
+    dir_list = dirs_list()
+    added = 0
+    with connection() as conn:
+        existing = set()
+        for row in conn.execute("SELECT dir_id, rel_path FROM playlist"):
+            existing.add((row["dir_id"], os.path.normcase(row["rel_path"] or "")))
+        for path in paths or []:
+            path = str(path)
+            if not path.strip():
+                continue
+            dir_id, rel = _match_dir(path, dir_list)
+            key = (dir_id, os.path.normcase(rel))
+            if key in existing:
+                continue
+            existing.add(key)
+            conn.execute(
+                "INSERT INTO playlist(dir_id, rel_path) VALUES(?,?)", (dir_id, rel)
+            )
+            added += 1
+    return added
+
+
+def playlist_remove(paths: list) -> int:
+    target = {path_key(p) for p in paths or []}
+    if not target:
+        return 0
+    removed = 0
+    with connection() as conn:
+        for entry in playlist_entries():
+            if path_key(entry["path"]) in target:
+                conn.execute("DELETE FROM playlist WHERE id = ?", (entry["id"],))
+                removed += 1
+    return removed
+
+
+def playlist_clean() -> int:
+    removed = 0
+    with connection() as conn:
+        for entry in playlist_entries():
+            if not os.path.exists(entry["path"]):
+                conn.execute("DELETE FROM playlist WHERE id = ?", (entry["id"],))
+                removed += 1
+    return removed
+
+
+def playlist_restore() -> int:
+    added = 0
+    with connection() as conn:
+        existing = set()
+        for row in conn.execute("SELECT dir_id, rel_path FROM playlist"):
+            existing.add((row["dir_id"], os.path.normcase(row["rel_path"] or "")))
+        for row in conn.execute("SELECT dir_id, rel_path, path FROM files"):
+            if row["dir_id"]:
+                dir_id, rel = row["dir_id"], row["rel_path"] or ""
+            else:
+                dir_id, rel = None, row["path"]
+            key = (dir_id, os.path.normcase(rel))
+            if key in existing:
+                continue
+            existing.add(key)
+            conn.execute(
+                "INSERT INTO playlist(dir_id, rel_path) VALUES(?,?)", (dir_id, rel)
+            )
+            added += 1
+    return added
+
+
+def playlist_clear() -> None:
+    with connection() as conn:
+        conn.execute("DELETE FROM playlist")
+
+
+def playlist_set_paths(paths: list) -> None:
+    playlist_clear()
+    playlist_add(paths)

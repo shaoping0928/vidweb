@@ -166,37 +166,69 @@ def mark_played(body: PathBody):
     return {"ok": True, "file_id": file_id}
 
 
+@router.get("/files/all")
+def files_all(limit: int = 20000):
+    return {"items": db.all_files(limit)}
+
+
 @router.post("/files/info")
 def files_info(body: PathsBody):
-    items = []
-    for raw in body.paths or []:
+    paths = [str(raw) for raw in (body.paths or []) if str(raw).strip()]
+    stats = {}
+    for raw in paths:
         p = Path(raw)
-        record = db.file_by_path(raw)
+        try:
+            st = p.stat()
+            stats[raw] = (p.name, st.st_size, int(st.st_mtime), True)
+        except OSError:
+            stats[raw] = (p.name, 0, 0, False)
+
+    records = {}
+    tag_map = {}
+    if paths:
+        with db.connection() as conn:
+            for start in range(0, len(paths), 500):
+                chunk = paths[start : start + 500]
+                placeholders = ",".join("?" for _ in chunk)
+                for row in conn.execute(
+                    f"SELECT * FROM files WHERE path IN ({placeholders})", chunk
+                ):
+                    records[row["path"]] = dict(row)
+            ids = [record["id"] for record in records.values()]
+            for start in range(0, len(ids), 500):
+                chunk = ids[start : start + 500]
+                placeholders = ",".join("?" for _ in chunk)
+                for row in conn.execute(
+                    "SELECT ft.file_id, t.name FROM file_tags ft"
+                    " JOIN tags t ON t.id = ft.tag_id"
+                    f" WHERE ft.file_id IN ({placeholders}) ORDER BY t.name",
+                    chunk,
+                ):
+                    tag_map.setdefault(row["file_id"], []).append(row["name"])
+
+    items = []
+    for raw in paths:
+        name, size, mtime, exists = stats[raw]
+        record = records.get(raw)
         item = {
             "path": raw,
-            "name": p.name,
-            "exists": p.exists(),
+            "name": name,
+            "exists": exists,
             "has_thumb": thumbs.cached(raw) is not None,
             "duration_ms": 0,
             "last_position_ms": 0,
             "play_count": 0,
             "last_played_at": 0,
-            "size": 0,
-            "mtime": 0,
+            "size": size,
+            "mtime": mtime,
             "tags": [],
         }
-        try:
-            st = p.stat()
-            item["size"] = st.st_size
-            item["mtime"] = int(st.st_mtime)
-        except OSError:
-            pass
         if record:
             item["duration_ms"] = record["duration_ms"]
             item["last_position_ms"] = record["last_position_ms"]
             item["play_count"] = record["play_count"]
             item["last_played_at"] = record["last_played_at"]
-            item["tags"] = [t["name"] for t in db.tags_for_file(record["id"])]
+            item["tags"] = tag_map.get(record["id"], [])
         items.append(item)
     return {"items": items}
 

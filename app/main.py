@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from . import config, db
-from .routers import browse, comments, files, library, recent, search, settings, tags, thumbs
+from .routers import browse, comments, dirs, files, library, recent, search, settings, state, tags, tasks, thumbs
 
 MINIMAL_HTML = """
 <!DOCTYPE html>
@@ -28,6 +28,15 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
+@app.middleware("http")
+async def no_cache_static(request, call_next):
+    response = await call_next(request)
+    path = request.url.path
+    if path == "/" or path.startswith("/js/") or path.startswith("/css/"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
 app.include_router(browse.router)
 app.include_router(library.router)
 app.include_router(files.router)
@@ -37,6 +46,9 @@ app.include_router(search.router)
 app.include_router(recent.router)
 app.include_router(thumbs.router)
 app.include_router(settings.router)
+app.include_router(tasks.router)
+app.include_router(state.router)
+app.include_router(dirs.router)
 
 
 @app.get("/api/config")

@@ -1,11 +1,14 @@
+import os
+import time
 from pathlib import Path
+from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from .. import config, db
+from .. import db
 from ..security import safe_path
-from ..services import scanner
+from ..services import scanjobs, thumbs
 
 router = APIRouter(prefix="/api")
 
@@ -14,47 +17,271 @@ class PathBody(BaseModel):
     path: str
 
 
-def _list_dirs() -> list:
-    dirs = config.load_config().get("library_dirs") or []
-    return [{"path": p, "exists": Path(p).exists()} for p in dirs]
+class JobBody(BaseModel):
+    job_id: str
 
 
-@router.get("/library/dirs")
-def list_dirs():
-    return {"items": _list_dirs()}
+class ScanBody(BaseModel):
+    path: str = ""
+    dir_id: Optional[int] = None
 
 
-@router.post("/library/dirs")
-def add_dir(body: PathBody):
-    real = safe_path(body.path)
-    if not real.is_dir():
-        raise HTTPException(status_code=400, detail="不是文件夹")
-    cfg = config.load_config()
-    dirs = [str(p) for p in (cfg.get("library_dirs") or [])]
-    value = str(real)
-    if value not in dirs:
-        dirs.append(value)
-        cfg["library_dirs"] = dirs
-        config.save_config(cfg)
-    return {"items": _list_dirs()}
+class PlaylistBody(BaseModel):
+    paths: list = []
 
 
-@router.post("/library/dirs/remove")
-def remove_dir(body: PathBody):
-    cfg = config.load_config()
-    value = str(Path(body.path))
-    dirs = [str(p) for p in (cfg.get("library_dirs") or [])]
-    cfg["library_dirs"] = [p for p in dirs if p != value and str(Path(p)) != value]
-    config.save_config(cfg)
-    return {"items": _list_dirs()}
+class PlaylistQuery(BaseModel):
+    offset: int = 0
+    limit: int = 30
+    search: str = ""
+    status: str = "all"
+    duration: str = "all"
+    tag_ids: list = []
+    tag_match_all: bool = False
+    sort: str = "name"
+    paths_only: bool = False
 
 
 @router.post("/scan")
-def scan(body: PathBody):
-    real = safe_path(body.path)
-    if not real.is_dir():
-        raise HTTPException(status_code=400, detail="不是文件夹")
-    files = scanner.scan_videos(real)
-    for path in files:
-        db.ensure_file(path)
-    return {"count": len(files), "files": files}
+def scan(body: ScanBody, request: Request):
+    ip = request.client.host if request.client else ""
+    if body.dir_id:
+        record = db.dir_by_id(body.dir_id)
+        if not record:
+            raise HTTPException(status_code=404, detail="路径库目录不存在")
+        real = Path(record["path"])
+        if not real.is_dir():
+            raise HTTPException(status_code=400, detail="目录不存在或不是文件夹")
+    else:
+        if not body.path.strip():
+            raise HTTPException(status_code=400, detail="缺少扫描路径")
+        real = safe_path(body.path)
+        if not real.is_dir():
+            raise HTTPException(status_code=400, detail="不是文件夹")
+    job_id = scanjobs.start_scan(str(real), ip=ip, dir_id=body.dir_id)
+    return {"job_id": job_id}
+
+
+@router.get("/scan/status")
+def scan_status(job_id: str, include_files: int = 0):
+    job = scanjobs.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    payload = {
+        "job_id": job["id"],
+        "path": job["path"],
+        "state": job["state"],
+        "total": job["total"],
+        "processed": job["processed"],
+        "added": job["added"],
+        "playlist_added": job.get("playlist_added", 0),
+        "error": job["error"],
+        "elapsed": round((job["finished_at"] or time.time()) - job["started_at"], 1),
+    }
+    if include_files and job["state"] in ("done", "cancelled"):
+        payload["files"] = job["files"]
+    return payload
+
+
+@router.post("/scan/cancel")
+def scan_cancel(body: JobBody):
+    return {"ok": scanjobs.cancel_job(body.job_id)}
+
+
+@router.get("/playlist")
+def get_playlist():
+    return {"items": db.playlist_paths()}
+
+
+@router.put("/playlist")
+def put_playlist(body: PlaylistBody):
+    paths = [str(p) for p in (body.paths or []) if str(p).strip()]
+    db.playlist_set_paths(paths)
+    return {"ok": True, "count": len(db.playlist_paths())}
+
+
+def _chunks(items, size):
+    for start in range(0, len(items), size):
+        yield items[start : start + size]
+
+
+def _load_playlist_entries(playlist_entries):
+    paths = [entry["path"] for entry in playlist_entries]
+    stats = {}
+    for raw in paths:
+        try:
+            st = os.stat(raw)
+            stats[raw] = (Path(raw).name, st.st_size, int(st.st_mtime), True)
+        except OSError:
+            stats[raw] = (Path(raw).name, 0, 0, False)
+    records = {}
+    tag_names = {}
+    tag_ids = {}
+    with db.connection() as conn:
+        for chunk in _chunks(paths, 500):
+            placeholders = ",".join("?" for _ in chunk)
+            for row in conn.execute(
+                f"SELECT * FROM files WHERE path IN ({placeholders})", chunk
+            ):
+                records[row["path"]] = dict(row)
+        ids = [record["id"] for record in records.values()]
+        for chunk in _chunks(ids, 500):
+            placeholders = ",".join("?" for _ in chunk)
+            for row in conn.execute(
+                "SELECT ft.file_id, t.id AS tag_id, t.name FROM file_tags ft"
+                " JOIN tags t ON t.id = ft.tag_id"
+                f" WHERE ft.file_id IN ({placeholders}) ORDER BY t.name",
+                chunk,
+            ):
+                tag_names.setdefault(row["file_id"], []).append(row["name"])
+                tag_ids.setdefault(row["file_id"], set()).add(row["tag_id"])
+    entries = []
+    for base_entry in playlist_entries:
+        raw = base_entry["path"]
+        name, size, mtime, exists = stats[raw]
+        record = records.get(raw)
+        file_id = record["id"] if record else None
+        entries.append(
+            {
+                "path": raw,
+                "name": name,
+                "size": size,
+                "mtime": mtime,
+                "exists": exists,
+                "dir_id": base_entry["dir_id"],
+                "rel_path": base_entry["rel_path"],
+                "dir_path": base_entry["dir_path"],
+                "duration_ms": record["duration_ms"] if record else 0,
+                "last_position_ms": record["last_position_ms"] if record else 0,
+                "play_count": record["play_count"] if record else 0,
+                "last_played_at": record["last_played_at"] if record else 0,
+                "tags": tag_names.get(file_id, []),
+                "_tag_ids": tag_ids.get(file_id, set()),
+            }
+        )
+    return entries
+
+
+@router.post("/playlist/query")
+def query_playlist(body: PlaylistQuery):
+    entries = _load_playlist_entries(db.playlist_entries())
+    total = len(entries)
+    keyword = (body.search or "").strip().lower()
+    tag_sets = []
+    if body.tag_ids:
+        for tag_id in body.tag_ids:
+            tag_sets.append(db.tag_subtree_ids(int(tag_id)))
+
+    filtered = []
+    for entry in entries:
+        if keyword and keyword not in entry["name"].lower():
+            continue
+        exists = entry["exists"]
+        if body.status == "missing":
+            if exists:
+                continue
+        else:
+            if not exists:
+                continue
+            if body.status == "new" and entry["play_count"] > 0:
+                continue
+            if body.status == "played" and entry["play_count"] <= 0:
+                continue
+            if body.status == "progress" and not entry["last_position_ms"] > 0:
+                continue
+        duration = entry["duration_ms"]
+        if body.duration == "unknown" and duration > 0:
+            continue
+        if body.duration == "short" and not (0 < duration <= 600000):
+            continue
+        if body.duration == "medium" and not (600000 < duration <= 1800000):
+            continue
+        if body.duration == "long" and not duration > 1800000:
+            continue
+        if tag_sets:
+            own = entry["_tag_ids"]
+
+            def matches_one(tag_set):
+                return any(tag_id in tag_set for tag_id in own)
+
+            ok = (
+                all(matches_one(tag_set) for tag_set in tag_sets)
+                if body.tag_match_all
+                else any(matches_one(tag_set) for tag_set in tag_sets)
+            )
+            if not ok:
+                continue
+        filtered.append(entry)
+
+    sort = body.sort or "name"
+    if sort == "name_desc":
+        filtered.sort(key=lambda e: e["name"].lower(), reverse=True)
+    elif sort == "recent":
+        filtered.sort(key=lambda e: e["last_played_at"], reverse=True)
+    elif sort == "plays":
+        filtered.sort(key=lambda e: e["play_count"], reverse=True)
+    elif sort == "duration":
+        filtered.sort(key=lambda e: e["duration_ms"], reverse=True)
+    elif sort == "size":
+        filtered.sort(key=lambda e: e["size"], reverse=True)
+    elif sort == "mtime":
+        filtered.sort(key=lambda e: e["mtime"], reverse=True)
+    else:
+        filtered.sort(key=lambda e: e["name"].lower())
+
+    count = len(filtered)
+    if body.paths_only:
+        return {"paths": [e["path"] for e in filtered], "total": total, "filtered": count}
+
+    offset = max(0, int(body.offset))
+    limit = min(500, max(1, int(body.limit)))
+    items = []
+    for entry in filtered[offset : offset + limit]:
+        item = {
+            "path": entry["path"],
+            "name": entry["name"],
+            "size": entry["size"],
+            "mtime": entry["mtime"],
+            "exists": entry["exists"],
+            "dir_id": entry["dir_id"],
+            "rel_path": entry["rel_path"],
+            "dir_path": entry["dir_path"],
+            "duration_ms": entry["duration_ms"],
+            "last_position_ms": entry["last_position_ms"],
+            "play_count": entry["play_count"],
+            "last_played_at": entry["last_played_at"],
+            "tags": entry["tags"],
+            "has_thumb": thumbs.cached(entry["path"]) is not None,
+        }
+        items.append(item)
+    return {"items": items, "total": total, "filtered": count, "offset": offset, "limit": limit}
+
+
+@router.post("/playlist/add")
+def playlist_add(body: PlaylistBody):
+    added = db.playlist_add(body.paths)
+    return {"added": added, "total": len(db.playlist_paths())}
+
+
+@router.post("/playlist/remove")
+def playlist_remove(body: PlaylistBody):
+    removed = db.playlist_remove(body.paths)
+    return {"removed": removed, "total": len(db.playlist_paths())}
+
+
+@router.post("/playlist/clean")
+def playlist_clean():
+    removed = db.playlist_clean()
+    return {"removed": removed, "total": len(db.playlist_paths())}
+
+
+@router.post("/playlist/restore")
+def playlist_restore():
+    added = db.playlist_restore()
+    return {"added": added, "total": len(db.playlist_paths())}
+
+
+@router.delete("/playlist")
+def playlist_clear():
+    db.playlist_clear()
+    return {"ok": True}
