@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>媒体播放器</title>
+<link rel="stylesheet" href="/css/theme.css">
+</head>
+<body>
+<div id="app">
+  <header id="topbar">
+    <div class="brand">媒体播放器</div>
+    <nav id="tabs">
+      <button class="tab active" data-tab="path">路径库</button>
+      <button class="tab" data-tab="lib">视频库</button>
+      <button class="tab" data-tab="recent">最近播放</button>
+      <button class="tab" data-tab="search">搜索</button>
+    </nav>
+    <div class="top-actions">
+      <button id="btnThumbBatch" title="为选中项或全部生成缩略图">生成缩略图</button>
+      <button id="btnDetail">详情</button>
+      <button id="btnExploreDir">打开文件夹</button>
+      <button id="btnAbout">关于</button>
+    </div>
+  </header>
+
+  <div id="ffmpegBanner" class="banner hidden"></div>
+
+  <main id="content">
+    <section id="page-path" class="page active">
+      <div class="toolbar">
+        <span class="label">路径</span>
+        <input id="pathInput" class="grow-input" placeholder="输入绝对路径，如 D:\Media">
+        <button id="pathGo">跳转</button>
+        <input id="pathFilter" placeholder="文件名过滤">
+        <label class="check"><input type="checkbox" id="onlyVideo">仅视频</label>
+        <select id="sortSelect">
+          <option value="0">名称 ↑</option>
+          <option value="1">名称 ↓</option>
+          <option value="2">大小 ↑</option>
+          <option value="3">大小 ↓</option>
+          <option value="4">时间 ↑</option>
+          <option value="5">时间 ↓</option>
+        </select>
+        <button id="pathRefresh">刷新</button>
+      </div>
+      <div class="path-layout">
+        <aside class="side">
+          <div class="side-head">
+            <span>路径库</span>
+            <span class="side-actions">
+              <button id="libAddDir">添加</button>
+              <button id="libRemoveDir">移除</button>
+              <button id="libScan" class="primary">扫描入库</button>
+            </span>
+          </div>
+          <ul id="dirList" class="list"></ul>
+        </aside>
+        <ul id="fileList" class="list grow"></ul>
+      </div>
+    </section>
+
+    <section id="page-lib" class="page">
+      <div class="toolbar">
+        <button id="plScanDir">扫描目录入库</button>
+        <button id="plImport">导入 m3u</button>
+        <button id="plExport">导出 m3u</button>
+        <button id="plThumb">生成缩略图</button>
+        <button id="plClean">移除失效项</button>
+        <button id="plClear">清空</button>
+        <span class="sep"></span>
+        <span class="label">标签筛选</span>
+        <select id="tagFilter"></select>
+        <button id="tagMulti">多标签</button>
+        <button id="tagManage">标签管理</button>
+      </div>
+      <ul id="playlistView" class="list media-list grow"></ul>
+    </section>
+
+    <section id="page-recent" class="page">
+      <div class="toolbar">
+        <button id="recentRefresh">刷新</button>
+        <button id="recentClear">清空记录</button>
+      </div>
+      <ul id="recentList" class="list media-list grow"></ul>
+    </section>
+
+    <section id="page-search" class="page">
+      <div class="toolbar">
+        <input id="searchInput" class="grow-input" placeholder="搜索文件名、标签和评论">
+        <button id="searchGo" class="primary">搜索</button>
+        <span id="searchInfo" class="label"></span>
+      </div>
+      <ul id="searchList" class="list media-list grow"></ul>
+    </section>
+
+    <aside id="detailPanel" class="hidden">
+      <div class="side-head">
+        <span>详情</span>
+        <button id="detailClose">关闭</button>
+      </div>
+      <div id="detailContent" class="detail-content"></div>
+    </aside>
+  </main>
+
+  <footer id="statusbar"><span id="statusText"></span></footer>
+</div>
+
+<div id="playerOverlay" class="hidden">
+  <div id="playerStage">
+    <video id="video" playsinline></video>
+    <div id="subtitleOverlay"></div>
+    <div id="playerOsd" class="hidden"></div>
+    <div id="playerTop">
+      <button id="playerBack">返回媒体库</button>
+      <span id="playerTitle"></span>
+      <span class="spacer"></span>
+      <button id="btnLoadSub">加载字幕</button>
+      <button id="btnToggleSub">字幕开关</button>
+      <button id="btnAddComment">添加评论</button>
+      <button id="btnComments">评论列表</button>
+    </div>
+  </div>
+  <aside id="playerPlaylist" class="hidden">
+    <div class="side-head">
+      <span>播放列表</span>
+      <button id="playerPlaylistClose">关闭</button>
+    </div>
+    <ul id="playerPlaylistView" class="list"></ul>
+  </aside>
+  <div id="controls">
+    <div id="progressWrap">
+      <div id="progressTrack">
+        <div id="progressFill"></div>
+        <div id="progressHandle"></div>
+        <div id="progressMarkers"></div>
+        <div id="progressTip" class="hidden"></div>
+      </div>
+    </div>
+    <div class="control-row">
+      <span id="timeNow" class="mono">0:00:00</span>
+      <button id="btnPrev" title="上一集">⏮</button>
+      <button id="btnPlay" title="播放 / 暂停 (Space)">▶</button>
+      <button id="btnNext" title="下一集">⏭</button>
+      <span id="timeTotal" class="mono">0:00:00</span>
+      <button id="btnMode" title="播放模式">顺序</button>
+      <button id="btnList" title="播放列表 (L)">列表</button>
+      <button id="btnAspect" title="画面比例 (A)">适应窗口</button>
+      <button id="btnSnap" title="截图 (C)">截图</button>
+      <span class="sep"></span>
+      <button id="btnMute" title="静音 (M)">音量</button>
+      <input id="volume" type="range" min="0" max="100" value="80">
+      <span id="volText" class="mono">80</span>
+      <span class="sep"></span>
+      <span class="label">倍速</span>
+      <input id="speed" type="range" min="5" max="40" value="10">
+      <span id="speedText" class="mono">1.0x</span>
+      <button id="btnFullscreen" title="全屏 (F)">全屏</button>
+    </div>
+  </div>
+</div>
+
+<input type="file" id="subtitleFileInput" accept=".srt,.ass,.ssa,.vtt" class="hidden">
+<div id="modalRoot"></div>
+
+<script src="/js/api.js"></script>
+<script src="/js/app.js"></script>
+<script src="/js/player.js"></script>
+</body>
+</html>
