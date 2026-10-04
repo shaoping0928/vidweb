@@ -1,151 +1,153 @@
-import hashlib
 import os
 import subprocess
 import threading
-import time
-import uuid
 from pathlib import Path
 
-from .. import config, db
+from .. import config
 from . import media_info
 
-_jobs = {}
-_lock = threading.Lock()
-_MAX_AGE = 3600
-TRANSCODE_DIR = config.DATA_DIR / "transcode"
+ENCODER_LABELS = {
+    "nvenc": "NVIDIA NVENC",
+    "qsv": "Intel QuickSync",
+    "amf": "AMD AMF",
+    "cpu": "CPU (libx264)",
+}
+ENCODER_KEYS = ("nvenc", "qsv", "amf", "cpu")
+
+_detect_lock = threading.Lock()
+_detected = None
 
 
-class TranscodeCancelled(Exception):
-    pass
+def _encoder_args(key: str):
+    if key == "nvenc":
+        return ["-c:v", "h264_nvenc", "-preset", "p4", "-tune", "ll", "-rc", "vbr", "-cq", "23", "-b:v", "0"]
+    if key == "qsv":
+        return ["-c:v", "h264_qsv", "-preset", "veryfast", "-global_quality", "23"]
+    if key == "amf":
+        return ["-c:v", "h264_amf", "-quality", "speed", "-rc", "cqp", "-qp_i", "23", "-qp_p", "23"]
+    if key == "cpu":
+        return ["-c:v", "libx264", "-preset", "veryfast", "-crf", "22"]
+    return None
 
 
-def cache_path_for(path: str) -> Path:
-    source = Path(path)
-    try:
-        stat = source.stat()
-        stamp = f"{os.path.abspath(path)}|{stat.st_size}|{int(stat.st_mtime)}"
-    except OSError:
-        stamp = os.path.abspath(path)
-    key = hashlib.md5(stamp.encode("utf-8")).hexdigest()
-    return TRANSCODE_DIR / (key + ".mp4")
+def _run_kwargs():
+    if os.name == "nt":
+        return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+    return {}
 
 
-def cached(path: str):
-    target = cache_path_for(path)
-    return str(target) if target.exists() and target.stat().st_size > 0 else None
-
-
-def _prune():
-    now = time.time()
-    for job_id in list(_jobs):
-        job = _jobs[job_id]
-        if job["finished_at"] and now - job["finished_at"] > _MAX_AGE:
-            _jobs.pop(job_id, None)
-
-
-def start(path: str, ip: str = "") -> str:
-    _prune()
-    job_id = uuid.uuid4().hex[:12]
-    job = {
-        "id": job_id,
-        "path": path,
-        "ip": ip,
-        "state": "running",
-        "progress": 0.0,
-        "duration_ms": 0,
-        "output": "",
-        "error": "",
-        "cancel": False,
-        "started_at": time.time(),
-        "finished_at": 0,
-    }
-    with _lock:
-        _jobs[job_id] = job
-    try:
-        db.create_task(job_id, "transcode", "转码", path, ip)
-    except Exception:
-        pass
-    threading.Thread(target=_run, args=(job,), name="transcode-" + job_id, daemon=True).start()
-    return job_id
-
-
-def get_job(job_id: str):
-    with _lock:
-        return _jobs.get(job_id)
-
-
-def cancel_job(job_id: str) -> bool:
-    job = get_job(job_id)
-    if not job or job["finished_at"]:
+def _test_encoder(ffmpeg: str, key: str) -> bool:
+    args = _encoder_args(key)
+    if not args:
         return False
-    job["cancel"] = True
-    return True
-
-
-def _run(job: dict):
-    output = cache_path_for(job["path"])
-    temp = output.with_suffix(".part.mp4")
+    cmd = [
+        ffmpeg, "-hide_banner", "-loglevel", "error",
+        "-f", "lavfi", "-i", "testsrc=duration=0.2:size=256x144:rate=10",
+        "-an", *args, "-f", "null", "-",
+    ]
     try:
+        proc = subprocess.run(cmd, capture_output=True, timeout=15, **_run_kwargs())
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0
+
+
+def available_encoders():
+    global _detected
+    if _detected is not None:
+        return _detected
+    with _detect_lock:
+        if _detected is not None:
+            return _detected
         ffmpeg = config.ffmpeg_path()
         if not ffmpeg:
-            raise RuntimeError("未检测到 ffmpeg")
-        info = media_info.probe(job["path"]) or {}
-        job["duration_ms"] = info.get("duration_ms") or 0
-        db.update_task(job["id"], state="running", total=job["duration_ms"])
-        TRANSCODE_DIR.mkdir(parents=True, exist_ok=True)
-        cmd = [
-            ffmpeg, "-hide_banner", "-y", "-i", job["path"],
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
-            "-c:a", "aac", "-b:a", "160k",
-            "-movflags", "+faststart",
-            "-progress", "pipe:1", "-nostats",
-            str(temp),
-        ]
-        kwargs = {"stdout": subprocess.PIPE, "stderr": subprocess.DEVNULL}
-        if os.name == "nt":
-            kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        proc = subprocess.Popen(cmd, **kwargs)
+            _detected = []
+            return _detected
+        found = [key for key in ("nvenc", "qsv", "amf") if _test_encoder(ffmpeg, key)]
+        found.append("cpu")
+        _detected = found
+        return _detected
+
+
+def resolve_encoder() -> str:
+    selected = (config.load_config().get("transcode_encoder") or "auto").lower()
+    available = available_encoders()
+    if selected in available:
+        return selected
+    for key in ("nvenc", "qsv", "amf"):
+        if key in available:
+            return key
+    return "cpu"
+
+
+def info() -> dict:
+    cfg = config.load_config()
+    enabled = bool(cfg.get("transcode"))
+    result = {
+        "enabled": enabled,
+        "selected": (cfg.get("transcode_encoder") or "auto").lower(),
+        "available": [],
+        "encoder": "",
+        "encoder_label": "",
+    }
+    if not enabled or not config.ffmpeg_path():
+        return result
+    available = available_encoders()
+    result["available"] = [{"key": key, "label": ENCODER_LABELS[key]} for key in available]
+    encoder = resolve_encoder()
+    result["encoder"] = encoder
+    result["encoder_label"] = ENCODER_LABELS.get(encoder, encoder)
+    return result
+
+
+def stream(path: str, start_ms: int = 0):
+    ffmpeg = config.ffmpeg_path()
+    if not ffmpeg:
+        raise RuntimeError("未检测到 ffmpeg")
+    encoder = resolve_encoder()
+    probed = media_info.streams(path) or {}
+    audio = probed.get("audio", "")
+    start_s = max(0, int(start_ms)) / 1000.0
+    cmd = [
+        ffmpeg, "-hide_banner", "-loglevel", "error",
+        "-ss", f"{start_s:.3f}",
+        "-i", path,
+        *_encoder_args(encoder),
+        "-pix_fmt", "yuv420p",
+    ]
+    if audio in ("aac", "mp3"):
+        cmd += ["-c:a", "copy"]
+    else:
+        cmd += ["-c:a", "aac", "-b:a", "160k"]
+    cmd += [
+        "-movflags", "frag_keyframe+empty_moov+default_base_moof",
+        "-f", "mp4", "pipe:1",
+    ]
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        bufsize=0,
+        **_run_kwargs(),
+    )
+
+    def generate():
         try:
-            for raw in proc.stdout:
-                if job["cancel"]:
-                    raise TranscodeCancelled()
-                line = raw.decode("utf-8", "replace").strip()
-                if line.startswith("out_time_us="):
-                    try:
-                        out_ms = int(line.split("=", 1)[1]) // 1000
-                    except ValueError:
-                        continue
-                    if job["duration_ms"]:
-                        job["progress"] = min(100.0, out_ms * 100.0 / job["duration_ms"])
-                        db.update_task(
-                            job["id"], state="running",
-                            processed=out_ms, total=job["duration_ms"],
-                        )
-            proc.wait()
+            while True:
+                chunk = proc.stdout.read(65536)
+                if not chunk:
+                    break
+                yield chunk
         finally:
-            if proc.poll() is None:
-                proc.kill()
-        if job["cancel"]:
-            raise TranscodeCancelled()
-        if proc.returncode != 0 or not temp.exists() or temp.stat().st_size <= 0:
-            raise RuntimeError("ffmpeg 转码失败")
-        os.replace(temp, output)
-        job["output"] = str(output)
-        job["progress"] = 100.0
-        job["state"] = "done"
-        db.finish_task(job["id"], "done", processed=job["duration_ms"], added=1)
-    except TranscodeCancelled:
-        job["state"] = "cancelled"
-        job["error"] = "已取消"
-        db.finish_task(job["id"], "cancelled", error="已取消")
-    except Exception as exc:
-        job["state"] = "error"
-        job["error"] = str(exc)
-        db.finish_task(job["id"], "error", error=str(exc))
-    finally:
-        try:
-            if temp.exists():
-                temp.unlink()
-        except OSError:
-            pass
-        job["finished_at"] = time.time()
+            try:
+                if proc.poll() is None:
+                    proc.kill()
+            except OSError:
+                pass
+            try:
+                proc.stdout.close()
+            except OSError:
+                pass
+            proc.wait()
+
+    return generate()

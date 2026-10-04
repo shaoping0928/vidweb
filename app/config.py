@@ -23,6 +23,7 @@ DEFAULTS = {
     "ffmpeg": "",
     "ffprobe": "",
     "transcode": False,
+    "transcode_encoder": "auto",
 }
 
 

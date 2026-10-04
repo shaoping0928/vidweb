@@ -184,7 +184,18 @@
 
           <div class="settings-subtitle">服务端转码</div>
           <label class="check"><input type="checkbox" id="setTranscode">为浏览器不支持的编码自动转码（H.264 / AAC）</label>
-          <div class="settings-hint">开启后，遇到 MPEG-4 / AVI / H.265 等浏览器不支持的视频，会后台转码并缓存到 data/transcode/，完成后自动继续播放（进度显示在右下角任务窗）。</div>
+          <div class="settings-hint">开启后，遇到浏览器不支持的视频会实时转码播放（不写入磁盘，播放结束即停止转码）。可在下方选择使用的硬件编码器。</div>
+          <div class="settings-row">
+            <label>转码硬件</label>
+            <select id="setTranscodeEncoder">
+              <option value="auto">自动（优先硬件）</option>
+              <option value="nvenc">NVIDIA NVENC</option>
+              <option value="qsv">Intel QuickSync</option>
+              <option value="amf">AMD AMF</option>
+              <option value="cpu">CPU (libx264)</option>
+            </select>
+          </div>
+          <div id="setTranscodeInfo" class="settings-hint"></div>
 
           <div class="settings-actions">
             <button id="setServerSave" class="primary">保存服务器设置</button>

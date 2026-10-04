@@ -162,9 +162,6 @@ def detail(path: str):
         result["thumbnail"] = thumb
         if record and record["thumbnail"] != thumb:
             db.set_thumbnail(record["id"], thumb)
-    from ..services import transcode
-
-    result["transcoded"] = transcode.cached(str(real)) or ""
     return result
 
 

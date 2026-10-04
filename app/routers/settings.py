@@ -19,6 +19,7 @@ class SettingsBody(BaseModel):
     ffmpeg: Optional[str] = None
     ffprobe: Optional[str] = None
     transcode: Optional[bool] = None
+    transcode_encoder: Optional[str] = None
 
 
 class TestToolBody(BaseModel):
@@ -49,6 +50,7 @@ def _settings_payload() -> dict:
         "ffmpeg": cfg.get("ffmpeg") or "",
         "ffprobe": cfg.get("ffprobe") or "",
         "transcode": bool(cfg.get("transcode")),
+        "transcode_encoder": (cfg.get("transcode_encoder") or "auto").lower(),
         "ffmpeg_resolved": config.ffmpeg_path() or "",
         "ffprobe_resolved": config.ffprobe_path() or "",
         "data_dir": str(config.DATA_DIR),
@@ -103,6 +105,11 @@ def update_settings(body: SettingsBody):
         cfg["ffprobe"] = body.ffprobe.strip()
     if body.transcode is not None:
         cfg["transcode"] = bool(body.transcode)
+    if body.transcode_encoder is not None:
+        encoder = body.transcode_encoder.strip().lower() or "auto"
+        if encoder not in ("auto", "nvenc", "qsv", "amf", "cpu"):
+            raise HTTPException(status_code=400, detail="转码硬件取值无效")
+        cfg["transcode_encoder"] = encoder
 
     config.save_config(cfg)
     return {

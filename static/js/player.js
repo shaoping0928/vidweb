@@ -33,7 +33,11 @@
     previewBucket: -1,
     ffmpegOn: false,
     transcodeOn: false,
-    transcodeJob: null,
+    streamMode: false,
+    streamOffsetMs: 0,
+    streamDurationMs: 0,
+    pendingSeekMs: null,
+    streamEncoderLabel: "",
     panelTab: "info",
     el: {},
 
@@ -157,18 +161,17 @@
       video.addEventListener("error", async () => {
         const path = this.paths[this.index];
         if (!path) return;
+        if (this.streamMode) {
+          this.showOsd("实时转码播放失败，请检查设置中的转码硬件");
+          return;
+        }
         try {
           const cfg = await API.get("/api/config");
           this.transcodeOn = !!cfg.transcode;
         } catch (e) {}
         if (this.transcodeOn) {
-          try {
-            const cache = await API.get("/api/transcode/cache", { path: path });
-            if (cache.cached && this.paths[this.index] === path) {
-              this.playTranscoded(path, cache.path);
-              return;
-            }
-          } catch (e) {}
+          this.startTranscodeStream(path);
+          return;
         }
         let detail = "";
         let playable = null;
@@ -182,12 +185,7 @@
           detail = parts.join(" / ");
         } catch (e) {}
         if (playable === false) {
-          if (this.transcodeOn) {
-            this.showOsd("浏览器不支持该编码（" + detail + "），开始转码…");
-            this.startTranscodeTask(path);
-          } else {
-            this.showOsd("浏览器不支持该编码（" + detail + "），可在设置中开启服务端转码");
-          }
+          this.showOsd("浏览器不支持该编码（" + detail + "），可在设置中开启服务端转码");
           return;
         }
         if (playable === null) {
@@ -258,6 +256,10 @@
       const token = ++this.loadToken;
       this.resumeApplied = false;
       this.pendingResume = -1;
+      this.streamMode = false;
+      this.streamOffsetMs = 0;
+      this.streamDurationMs = 0;
+      this.pendingSeekMs = null;
       this.cues = [];
       this.subName = "";
       this.subVisible = true;
@@ -281,13 +283,6 @@
         if (token !== this.loadToken) return;
         this.currentDetail = detail;
         this.renderInfoPanel(detail);
-        if (this.transcodeOn && detail.transcoded && this.paths[this.index] === path) {
-          this.resumeApplied = false;
-          this.pendingResume = detail.record ? detail.record.last_position_ms : 0;
-          this.el.video.src = API.streamUrl(detail.transcoded);
-          this.el.video.play().catch(() => {});
-          return;
-        }
         if (detail.record && detail.record.last_position_ms > 0) {
           this.pendingResume = detail.record.last_position_ms;
           this.maybeResume();
@@ -297,14 +292,14 @@
 
     onLoadedMetadata() {
       const video = this.el.video;
-      this.el.timeTotal.textContent = Fmt.time((video.duration || 0) * 1000);
+      this.el.timeTotal.textContent = Fmt.time(this.videoDurationMs());
       this.maybeResume();
       this.renderMarkers();
       const path = this.paths[this.index];
       if (path) {
         API.post("/api/files/media_info", {
           path: path,
-          duration_ms: Math.round((video.duration || 0) * 1000),
+          duration_ms: Math.round(this.videoDurationMs()),
           width: video.videoWidth || 0,
           height: video.videoHeight || 0,
         }).catch(() => {});
@@ -340,66 +335,101 @@
       else video.pause();
     },
 
-    playTranscoded(path, cachedPath) {
-      if (this.paths[this.index] !== path) return;
-      const pos = this.el.video.currentTime || 0;
-      this.resumeApplied = false;
-      this.pendingResume = Math.round(pos * 1000);
-      this.el.video.src = API.streamUrl(cachedPath);
-      this.el.video.play().catch(() => {});
-      this.showOsd("已切换到转码版本播放");
+    transcodeStreamUrl(path, startMs) {
+      return (
+        "/api/transcode/stream?path=" +
+        encodeURIComponent(path) +
+        "&start=" +
+        Math.max(0, Math.round(startMs || 0))
+      );
     },
 
-    async startTranscodeTask(path) {
-      if (this.transcodeJob) return;
-      let jobId;
+    async startTranscodeStream(path) {
+      if (this.paths[this.index] !== path) return;
+      const video = this.el.video;
+      const posMs = Math.round((video.currentTime || 0) * 1000);
+      const resumeMs = this.pendingResume > 0 ? this.pendingResume : 0;
+      const startMs = posMs > 1000 ? posMs : resumeMs;
+      const record = this.currentDetail && this.currentDetail.record;
+      this.streamMode = true;
+      this.streamOffsetMs = Math.max(0, startMs);
+      this.streamDurationMs = (record && record.duration_ms) || 0;
+      this.pendingSeekMs = null;
+      this.resumeApplied = true;
+      this.pendingResume = -1;
+      video.src = this.transcodeStreamUrl(path, this.streamOffsetMs);
+      video.play().catch(() => {});
+      this.updateProgress();
+      this.showOsd("已切换实时转码播放（不占用磁盘）");
+      if (!this.streamDurationMs) {
+        try {
+          const detail = await API.get("/api/files/detail", { path: path });
+          if (this.streamMode && this.paths[this.index] === path && detail.record) {
+            this.currentDetail = this.currentDetail || detail;
+            this.streamDurationMs = detail.record.duration_ms || 0;
+            this.updateProgress();
+          }
+        } catch (e) {}
+      }
       try {
-        const res = await API.post("/api/transcode", { path: path });
-        jobId = res.job_id;
-      } catch (e) {
-        this.showOsd("转码启动失败：" + e.message);
+        const info = await API.get("/api/transcode/info");
+        if (this.streamMode && this.paths[this.index] === path && info.encoder_label) {
+          this.streamEncoderLabel = info.encoder_label;
+          this.showOsd("实时转码播放：" + info.encoder_label);
+        }
+      } catch (e) {}
+    },
+
+    restartStreamAt(ms) {
+      const path = this.paths[this.index];
+      if (!path || !this.streamMode) return;
+      const duration = this.videoDurationMs();
+      let target = Math.max(0, Math.round(ms));
+      if (duration > 0) target = Math.min(target, duration - 1000);
+      this.streamOffsetMs = target;
+      this.pendingSeekMs = null;
+      this.el.video.src = this.transcodeStreamUrl(path, target);
+      this.el.video.play().catch(() => {});
+      this.updateProgress();
+    },
+
+    applySeekMs(ms) {
+      if (this.streamMode) {
+        this.restartStreamAt(ms);
         return;
       }
-      this.transcodeJob = jobId;
-      const self = this;
-      const name = String(path).split(/[\\/]/).pop();
-      Tasks.run({
-        title: "转码：" + name,
-        tooltip: path,
-        poll: async () => {
-          const st = await API.get("/api/transcode/status", { job_id: jobId });
-          if (st.state === "running") {
-            return {
-              state: "running",
-              percent: st.progress || 0,
-              text: "转码中 " + Math.round(st.progress || 0) + "%",
-            };
-          }
-          if (st.state === "done") return { state: "done", percent: 100, text: "切换播放…" };
-          if (st.state === "cancelled") return { state: "cancelled", percent: 100, text: "已取消" };
-          return { state: "error", percent: null, text: "转码失败：" + (st.error || "") };
-        },
-        onFinish: async (status) => {
-          self.transcodeJob = null;
-          if (status.state !== "done") return null;
-          try {
-            const cache = await API.get("/api/transcode/cache", { path: path });
-            if (cache.cached) self.playTranscoded(path, cache.path);
-          } catch (e) {}
-          return "转码完成";
-        },
-        onCancel: () =>
-          API.post("/api/transcode/cancel", { job_id: jobId }).catch(() => {}),
-      });
+      const duration = this.videoDurationMs();
+      if (duration <= 0) return;
+      this.el.video.currentTime = Math.min(Math.max(0, ms / 1000), duration / 1000);
+      this.updateProgress();
+    },
+
+    videoDurationMs() {
+      if (this.streamMode && this.streamDurationMs > 0) return this.streamDurationMs;
+      const video = this.el.video;
+      if (isFinite(video.duration) && video.duration > 0) return video.duration * 1000;
+      return 0;
+    },
+
+    videoPositionMs() {
+      const base = (this.el.video.currentTime || 0) * 1000;
+      return this.streamMode ? this.streamOffsetMs + base : base;
+    },
+
+    stopStream() {
+      if (!this.streamMode) return;
+      this.streamMode = false;
+      this.streamOffsetMs = 0;
+      this.pendingSeekMs = null;
+      const video = this.el.video;
+      video.removeAttribute("src");
+      video.load();
     },
 
     seekRelative(ms) {
-      const video = this.el.video;
-      if (!isFinite(video.duration) || video.duration <= 0) return;
-      video.currentTime = Math.min(
-        Math.max(0, video.currentTime + ms / 1000),
-        video.duration
-      );
+      const duration = this.videoDurationMs();
+      if (duration <= 0) return;
+      this.applySeekMs(this.videoPositionMs() + ms);
     },
 
     startArrowHold(direction) {
@@ -415,10 +445,14 @@
           this.showOsd("快进 " + this.el.video.playbackRate.toFixed(1) + "x（松开恢复）");
         } else {
           this.el.video.playbackRate = base;
+          if (this.streamMode) {
+            this.showOsd("快退 5s（松开生效）");
+            return;
+          }
           this.showOsd("快退 3.0x（松开恢复）");
           this.arrowInterval = setInterval(() => {
             const video = this.el.video;
-            if (!isFinite(video.duration) || video.duration <= 0) return;
+            if (this.videoDurationMs() <= 0) return;
             video.currentTime = Math.max(0, video.currentTime - 0.45);
           }, 150);
         }
@@ -475,6 +509,7 @@
       this.stopArrowHold();
       this.hidePreview();
       this.saveProgress();
+      this.stopStream();
       this.el.video.pause();
       if (window.APP && window.APP.setTab) window.APP.setTab("lib");
       if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
@@ -484,10 +519,9 @@
     saveProgress() {
       const path = this.paths[this.index];
       if (!path) return;
-      const video = this.el.video;
-      if (!isFinite(video.duration) || video.duration <= 0) return;
-      const pos = video.currentTime * 1000;
-      const duration = video.duration * 1000;
+      const duration = this.videoDurationMs();
+      if (duration <= 0) return;
+      const pos = this.videoPositionMs();
       let value = null;
       if (pos > duration - 5000) value = 0;
       else if (pos > 5000) value = Math.round(pos);
@@ -498,11 +532,10 @@
     beaconProgress() {
       const path = this.paths[this.index];
       if (!path) return;
-      const video = this.el.video;
-      if (!isFinite(video.duration) || video.duration <= 0) return;
+      if (this.videoDurationMs() <= 0) return;
       const data = JSON.stringify({
         path: path,
-        position_ms: Math.round(video.currentTime * 1000),
+        position_ms: Math.round(this.videoPositionMs()),
       });
       try {
         navigator.sendBeacon(
@@ -796,7 +829,7 @@
         actions.append(edit, remove);
         row.append(time, text, actions);
         row.addEventListener("click", () => {
-          this.el.video.currentTime = comment.position_ms / 1000;
+          this.applySeekMs(comment.position_ms);
         });
         list.appendChild(row);
       }
@@ -907,7 +940,7 @@
     },
 
     resetDanmaku(nowMs) {
-      const now = nowMs !== undefined ? nowMs : this.el.video.currentTime * 1000;
+      const now = nowMs !== undefined ? nowMs : this.videoPositionMs();
       this.clearDanmaku();
       this.lastDanmakuTime = now;
       if (!this.danmakuOn) return;
@@ -930,7 +963,7 @@
     danmakuStep() {
       if (!this.danmakuOn) return;
       if (!this.el.playerPage.classList.contains("active")) return;
-      const t = this.el.video.currentTime * 1000;
+      const t = this.videoPositionMs();
       const last = this.lastDanmakuTime;
       if (last < 0) {
         this.lastDanmakuTime = t;
@@ -967,7 +1000,7 @@
       const layer = this.el.danmakuLayer;
       const width = layer.clientWidth;
       if (!width) return;
-      const nowVideo = this.el.video.currentTime * 1000;
+      const nowVideo = this.videoPositionMs();
       const cross = this.danmakuCrossMs();
       const lane = this.pickLane(nowVideo);
       this.laneFree[lane] = nowVideo + cross * 0.6;
@@ -984,25 +1017,25 @@
     },
 
     updateProgress() {
-      const video = this.el.video;
-      const duration = isFinite(video.duration) ? video.duration : 0;
-      const current = video.currentTime || 0;
+      const duration = this.videoDurationMs();
+      let current = this.videoPositionMs();
+      if (this.streamMode && this.pendingSeekMs !== null) current = this.pendingSeekMs;
       const pct = duration > 0 ? Math.min(100, (current / duration) * 100) : 0;
       this.el.progressFill.style.width = pct + "%";
       this.el.progressHandle.style.left = pct + "%";
-      this.el.timeNow.textContent = Fmt.time(current * 1000);
-      if (duration > 0) this.el.timeTotal.textContent = Fmt.time(duration * 1000);
+      this.el.timeNow.textContent = Fmt.time(current);
+      if (duration > 0) this.el.timeTotal.textContent = Fmt.time(duration);
     },
 
     renderMarkers() {
       const container = this.el.progressMarkers;
       container.innerHTML = "";
-      const video = this.el.video;
-      if (!this.markers.length || !isFinite(video.duration) || video.duration <= 0) return;
+      const duration = this.videoDurationMs();
+      if (!this.markers.length || duration <= 0) return;
       for (const marker of this.markers) {
         const span = document.createElement("span");
         span.className = "marker";
-        const left = Math.min(100, Math.max(0, (marker.position / (video.duration * 1000)) * 100));
+        const left = Math.min(100, Math.max(0, (marker.position / duration) * 100));
         span.style.left = left + "%";
         span.title = "[" + Fmt.time(marker.position) + "] " + String(marker.text).replace(/\n/g, " ");
         container.appendChild(span);
@@ -1010,12 +1043,12 @@
     },
 
     markerNear(x, width) {
-      const video = this.el.video;
-      if (!this.markers.length || !isFinite(video.duration) || video.duration <= 0) return null;
+      const duration = this.videoDurationMs();
+      if (!this.markers.length || duration <= 0) return null;
       let best = null;
       let bestDistance = Infinity;
       for (const marker of this.markers) {
-        const pixel = (marker.position / (video.duration * 1000)) * width;
+        const pixel = (marker.position / duration) * width;
         const distance = Math.abs(pixel - x);
         if (distance <= 6 && distance < bestDistance) {
           best = marker;
@@ -1026,20 +1059,25 @@
     },
 
     seekFromPointer(e) {
-      const video = this.el.video;
-      if (!isFinite(video.duration) || video.duration <= 0) return;
+      const duration = this.videoDurationMs();
+      if (duration <= 0) return;
       const rect = this.el.progressTrack.getBoundingClientRect();
       const x = Math.min(Math.max(e.clientX - rect.left, 0), rect.width);
       const ratio = rect.width > 0 ? x / rect.width : 0;
-      let time = ratio * video.duration;
+      let timeMs = ratio * duration;
       const marker = this.markerNear(x, rect.width);
-      if (marker) time = marker.position / 1000;
-      video.currentTime = Math.min(time, video.duration);
+      if (marker) timeMs = marker.position;
+      if (this.streamMode) {
+        this.pendingSeekMs = Math.min(timeMs, duration);
+        this.updateProgress();
+        return;
+      }
+      this.el.video.currentTime = Math.min(timeMs / 1000, duration / 1000);
       this.updateProgress();
     },
 
     onPointerDown(e) {
-      if (!isFinite(this.el.video.duration) || this.el.video.duration <= 0) return;
+      if (this.videoDurationMs() <= 0) return;
       this.dragging = true;
       this.hidePreview();
       this.el.progressTrack.setPointerCapture(e.pointerId);
@@ -1054,16 +1092,16 @@
         this.seekFromPointer(e);
         return;
       }
-      const video = this.el.video;
+      const duration = this.videoDurationMs();
       const marker = this.markerNear(x, rect.width);
       let text;
       let left;
       if (marker) {
         text = "[" + Fmt.time(marker.position) + "] " + String(marker.text).replace(/\n/g, " ");
-        left = (marker.position / (video.duration * 1000)) * 100;
-      } else if (isFinite(video.duration) && video.duration > 0) {
+        left = (marker.position / duration) * 100;
+      } else if (duration > 0) {
         const ratio = x / rect.width;
-        const seconds = ratio * video.duration;
+        const seconds = (ratio * duration) / 1000;
         left = ratio * 100;
         if (this.ffmpegOn) {
           this.el.progressTip.classList.add("hidden");
@@ -1089,6 +1127,9 @@
       } catch (error) {}
       this.el.progressTip.classList.add("hidden");
       this.hidePreview();
+      if (this.streamMode && this.pendingSeekMs !== null) {
+        this.restartStreamAt(this.pendingSeekMs);
+      }
     },
 
     onKey(e) {
@@ -1199,7 +1240,7 @@
           const form = new FormData();
           form.append("file", blob, name);
           form.append("path", this.paths[this.index] || "");
-          form.append("position_ms", Math.round(this.el.video.currentTime * 1000));
+          form.append("position_ms", Math.round(this.videoPositionMs()));
           const res = await fetch("/api/screenshots", { method: "POST", body: form });
           if (!res.ok) throw new Error("upload failed");
           this.showOsd("截图已保存: " + name);
@@ -1259,7 +1300,7 @@
         if (overlay.textContent) overlay.textContent = "";
         return;
       }
-      const pos = this.el.video.currentTime * 1000 - this.subDelay;
+      const pos = this.videoPositionMs() - this.subDelay;
       let text = "";
       for (const cue of this.cues) {
         if (pos >= cue.start && pos <= cue.end) {
@@ -1302,7 +1343,7 @@
         return;
       }
       if (!this.el.video.paused) this.el.video.pause();
-      const pos = Math.round(this.el.video.currentTime * 1000);
+      const pos = Math.round(this.videoPositionMs());
       const text = await UI.prompt("在 " + Fmt.time(pos) + " 处添加评论：", "", {
         multiline: true,
       });

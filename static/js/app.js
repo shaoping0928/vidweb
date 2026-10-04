@@ -1823,6 +1823,7 @@
     $("#setFfmpeg").value = data.ffmpeg;
     $("#setFfprobe").value = data.ffprobe;
     $("#setTranscode").checked = !!data.transcode;
+    $("#setTranscodeEncoder").value = data.transcode_encoder || "auto";
     $("#setDataDir").textContent = data.data_dir;
     $("#setConfigFile").textContent = data.config_file;
     $("#setToolStatus").textContent = data.ffmpeg_resolved
@@ -1844,6 +1845,7 @@
     $("#aboutDataDir").textContent = state.config.data_dir || data.data_dir || "";
     $("#aboutConfigFile").textContent = data.config_file || "";
     updatePlayerDefaultLabels();
+    await refreshTranscodeInfo();
   }
 
   function loadPlayerDefaults() {
@@ -1862,6 +1864,45 @@
     $("#setSpeedText").textContent = (Number($("#setSpeed").value) / 10).toFixed(1) + "x";
   }
 
+  const TRANSCODE_ENCODER_LABELS = {
+    auto: "自动（优先硬件）",
+    nvenc: "NVIDIA NVENC",
+    qsv: "Intel QuickSync",
+    amf: "AMD AMF",
+    cpu: "CPU (libx264)",
+  };
+
+  async function refreshTranscodeInfo() {
+    const infoEl = $("#setTranscodeInfo");
+    const select = $("#setTranscodeEncoder");
+    for (const option of select.options) {
+      option.textContent = TRANSCODE_ENCODER_LABELS[option.value] || option.value;
+      option.disabled = false;
+    }
+    if (!$("#setTranscode").checked) {
+      infoEl.textContent = "未开启服务端转码";
+      return;
+    }
+    let info;
+    try {
+      info = await API.get("/api/transcode/info");
+    } catch (e) {
+      infoEl.textContent = "检测失败";
+      return;
+    }
+    const available = new Set((info.available || []).map((item) => item.key));
+    for (const key of ["nvenc", "qsv", "amf"]) {
+      const option = select.querySelector('option[value="' + key + '"]');
+      if (option && !available.has(key)) {
+        option.disabled = true;
+        option.textContent = TRANSCODE_ENCODER_LABELS[key] + "（不可用）";
+      }
+    }
+    infoEl.textContent = info.encoder_label
+      ? "当前使用：" + info.encoder_label + "（保存后生效）"
+      : "未检测到可用编码器";
+  }
+
   async function saveServerSettings() {
     try {
       const res = await API.put("/api/settings", {
@@ -1871,8 +1912,10 @@
         ffmpeg: $("#setFfmpeg").value.trim(),
         ffprobe: $("#setFfprobe").value.trim(),
         transcode: $("#setTranscode").checked,
+        transcode_encoder: $("#setTranscodeEncoder").value,
       });
       await refreshConfig();
+      await refreshTranscodeInfo();
       await loadDrives();
       await loadSettings();
       UI.toast(
@@ -2267,6 +2310,7 @@
       UI.toast("每页数量已设置为 " + pageSize());
     });
     $("#setServerSave").addEventListener("click", saveServerSettings);
+    $("#setTranscode").addEventListener("change", refreshTranscodeInfo);
     $("#setFfmpegTest").addEventListener("click", () =>
       testTool("ffmpeg", "#setFfmpeg", $("#setToolStatus"))
     );
