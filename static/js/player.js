@@ -20,6 +20,7 @@
     lastDanmakuTime: -1,
     laneFree: [],
     panelPage: 1,
+    dragIndex: null,
     arrowTimer: null,
     arrowInterval: null,
     arrowDirection: 0,
@@ -130,8 +131,60 @@
         this.toggleFullscreen();
       });
       el.playerPlaylistView.addEventListener("dblclick", (e) => {
+        if (e.target.closest(".pl-remove")) return;
         const li = e.target.closest("li");
         if (li && li.dataset.index !== undefined) this.playIndex(parseInt(li.dataset.index, 10));
+      });
+      el.playerPlaylistView.addEventListener("click", (e) => {
+        const btn = e.target.closest(".pl-remove");
+        if (!btn) return;
+        e.stopPropagation();
+        const li = btn.closest("li");
+        if (li && li.dataset.index !== undefined) {
+          this.removePanelItem(parseInt(li.dataset.index, 10));
+        }
+      });
+      el.playerPlaylistView.addEventListener("dragstart", (e) => {
+        const li = e.target.closest("li");
+        if (!li || li.dataset.index === undefined) return;
+        this.dragIndex = parseInt(li.dataset.index, 10);
+        li.classList.add("dragging");
+        if (e.dataTransfer) {
+          e.dataTransfer.effectAllowed = "move";
+          e.dataTransfer.setData("text/plain", String(this.dragIndex));
+        }
+      });
+      el.playerPlaylistView.addEventListener("dragover", (e) => {
+        if (this.dragIndex === null) return;
+        const li = e.target.closest("li");
+        if (!li || li.dataset.index === undefined) return;
+        e.preventDefault();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+        const rect = li.getBoundingClientRect();
+        const after = e.clientY - rect.top > rect.height / 2;
+        Array.from(el.playerPlaylistView.querySelectorAll("li")).forEach((row) => {
+          row.classList.toggle("drop-after", row === li && after);
+          row.classList.toggle("drop-before", row === li && !after);
+        });
+      });
+      el.playerPlaylistView.addEventListener("dragleave", (e) => {
+        if (!el.playerPlaylistView.contains(e.relatedTarget)) this.clearDragMarks();
+      });
+      el.playerPlaylistView.addEventListener("drop", (e) => {
+        if (this.dragIndex === null) return;
+        const li = e.target.closest("li");
+        if (!li || li.dataset.index === undefined) return;
+        e.preventDefault();
+        const rect = li.getBoundingClientRect();
+        const after = e.clientY - rect.top > rect.height / 2;
+        const target = parseInt(li.dataset.index, 10);
+        const from = this.dragIndex;
+        this.dragIndex = null;
+        this.movePanelItem(from, after ? target + 1 : target);
+      });
+      el.playerPlaylistView.addEventListener("dragend", () => {
+        this.dragIndex = null;
+        this.clearDragMarks();
       });
 
       const video = el.video;
@@ -255,9 +308,9 @@
       await this.playIndex(index || 0);
     },
 
-    async playIndex(i) {
+    async playIndex(i, skipSave) {
       if (!this.paths.length) return;
-      this.saveProgress();
+      if (!skipSave) this.saveProgress();
       const count = this.paths.length;
       this.index = ((i % count) + count) % count;
       const path = this.paths[this.index];
@@ -648,6 +701,10 @@
 
     updateTitle() {
       const path = this.paths[this.index] || "";
+      if (!path) {
+        document.title = "Media Web";
+        return;
+      }
       const title = this.index + 1 + "/" + this.paths.length + " - " + path.split(/[\\/]/).pop();
       document.title = title;
     },
@@ -668,9 +725,18 @@
       this.paths.slice(start, start + size).forEach((path, offset) => {
         const index = start + offset;
         const li = document.createElement("li");
-        li.textContent = index + 1 + ". " + path.split(/[\\/]/).pop();
-        li.title = path;
         li.dataset.index = index;
+        li.draggable = true;
+        li.title = path;
+        const name = document.createElement("span");
+        name.className = "pl-title";
+        name.textContent = index + 1 + ". " + path.split(/[\\/]/).pop();
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "pl-remove";
+        remove.title = "从播放列表移除";
+        remove.textContent = "✕";
+        li.append(name, remove);
         list.appendChild(li);
       });
       this.renderPlaylistPager(size, totalPages);
@@ -732,6 +798,61 @@
       });
       const current = this.el.playerPlaylistView.querySelector("li.selected");
       if (current) current.scrollIntoView({ block: "center" });
+    },
+
+    removePanelItem(index) {
+      if (index < 0 || index >= this.paths.length) return;
+      const wasCurrent = index === this.index;
+      if (wasCurrent) this.saveProgress();
+      this.paths.splice(index, 1);
+      if (!this.paths.length) {
+        this.index = -1;
+        this.pauseForLeave();
+        this.el.video.removeAttribute("src");
+        this.el.video.load();
+        this.renderPlaylistPanel();
+        this.updateTitle();
+        return;
+      }
+      if (wasCurrent) {
+        this.index = Math.min(index, this.paths.length - 1);
+        this.renderPlaylistPanel();
+        this.playIndex(this.index, true);
+        return;
+      }
+      if (index < this.index) this.index -= 1;
+      this.renderPlaylistPanel();
+      this.updatePlaylistSelection();
+      this.updateTitle();
+    },
+
+    movePanelItem(from, to) {
+      const count = this.paths.length;
+      if (from < 0 || from >= count) return;
+      to = Math.max(0, Math.min(count, to));
+      if (to === from || to === from + 1) return;
+      const [item] = this.paths.splice(from, 1);
+      const insert = to > from ? to - 1 : to;
+      this.paths.splice(insert, 0, item);
+      if (this.index === from) {
+        this.index = insert;
+      } else {
+        let current = this.index;
+        if (from < current) current -= 1;
+        if (insert <= current) current += 1;
+        this.index = current;
+      }
+      this.clearDragMarks();
+      this.renderPlaylistPanel();
+      this.updatePlaylistSelection();
+      this.updateTitle();
+    },
+
+    clearDragMarks() {
+      if (!this.el.playerPlaylistView) return;
+      Array.from(this.el.playerPlaylistView.querySelectorAll("li")).forEach((row) => {
+        row.classList.remove("dragging", "drop-before", "drop-after");
+      });
     },
 
     togglePanel() {
