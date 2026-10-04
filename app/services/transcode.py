@@ -13,6 +13,7 @@ ENCODER_LABELS = {
     "cpu": "CPU (libx264)",
 }
 ENCODER_KEYS = ("nvenc", "qsv", "amf", "cpu")
+REMUX_VIDEO_CODECS = {"h264", "vp9", "av1"}
 
 _detect_lock = threading.Lock()
 _detected = None
@@ -100,27 +101,39 @@ def info() -> dict:
     return result
 
 
-def stream(path: str, start_ms: int = 0):
+def plan(path: str) -> dict:
+    probed = media_info.streams(path) or {}
+    video = probed.get("video", "")
+    audio = probed.get("audio", "")
+    return {
+        "mode": "remux" if video in REMUX_VIDEO_CODECS else "transcode",
+        "video": video,
+        "audio": audio,
+    }
+
+
+def stream(path: str, start_ms: int = 0, plan_info: dict = None):
     ffmpeg = config.ffmpeg_path()
     if not ffmpeg:
         raise RuntimeError("未检测到 ffmpeg")
-    encoder = resolve_encoder()
-    probed = media_info.streams(path) or {}
+    probed = plan_info or plan(path)
     audio = probed.get("audio", "")
+    remux = probed.get("mode") == "remux"
     start_s = max(0, int(start_ms)) / 1000.0
     cmd = [
         ffmpeg, "-hide_banner", "-loglevel", "error",
         "-ss", f"{start_s:.3f}",
         "-i", path,
-        *_encoder_args(encoder),
-        "-pix_fmt", "yuv420p",
     ]
+    if remux:
+        cmd += ["-c:v", "copy"]
+    else:
+        cmd += [*_encoder_args(resolve_encoder()), "-pix_fmt", "yuv420p", "-g", "48"]
     if audio == "aac":
         cmd += ["-c:a", "copy"]
     else:
         cmd += ["-c:a", "aac", "-b:a", "160k"]
     cmd += [
-        "-g", "48",
         "-max_interleave_delta", "0",
         "-movflags", "frag_keyframe+empty_moov+default_base_moof",
         "-f", "mp4", "pipe:1",

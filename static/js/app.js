@@ -23,6 +23,9 @@
     treeToken: 0,
     treeExpanded: new Set(),
     libFilters: loadLibFilters(),
+    collections: [],
+    collectionCounts: {},
+    activeCollectionId: null,
     tags: [],
     tagSubtrees: new Map(),
     tagExpanded: {},
@@ -295,6 +298,7 @@
     if (name === "tasks") renderTasksPage();
     if (name === "settings") loadSettings();
     if (name === "player") setDetailVisible(false);
+    if (name === "lib") loadCollections();
   }
 
   /* ------------------------------------------------------------ UI */
@@ -1020,6 +1024,7 @@
       tagNames: [],
       tree: !!state.libFilters.tree,
     };
+    clearActiveCollection();
     saveLibFilters();
     restoreLibFilterUI();
     renderLibTagList();
@@ -1403,6 +1408,7 @@
             (n) => n !== node.name
           );
         }
+        clearActiveCollection();
         saveLibFilters();
         refreshPlaylistView(true);
       });
@@ -1412,6 +1418,172 @@
       }
     };
     buildTagTree(state.tags).forEach((root) => renderNode(root, 0));
+  }
+
+  /* ------------------------------------------------------------ collections */
+
+  function collectionFiltersFromState() {
+    return {
+      search: state.libFilters.search || "",
+      status: state.libFilters.status || "all",
+      duration: state.libFilters.duration || "all",
+      tagNames: (state.libFilters.tagNames || []).slice(),
+      tagMode: state.libFilters.tagMode || "any",
+      sort: state.libFilters.sort || "name",
+    };
+  }
+
+  function collectionSummary(filters) {
+    const f = filters || {};
+    const parts = [];
+    if (f.search) parts.push("搜索: " + f.search);
+    const statusNames = {
+      new: "未播放",
+      progress: "有进度",
+      played: "已播放",
+      missing: "失效",
+    };
+    if (f.status && f.status !== "all") parts.push(statusNames[f.status] || f.status);
+    const durationNames = {
+      short: "10 分钟以内",
+      medium: "10 – 30 分钟",
+      long: "30 分钟以上",
+      unknown: "未知时长",
+    };
+    if (f.duration && f.duration !== "all") {
+      parts.push(durationNames[f.duration] || f.duration);
+    }
+    const tagNames = f.tagNames || [];
+    if (tagNames.length) {
+      parts.push("标签: " + tagNames.join(f.tagMode === "all" ? " + " : " / "));
+    }
+    if (f.sort && f.sort !== "name") parts.push("排序: " + f.sort);
+    return parts.join(" · ") || "全部视频";
+  }
+
+  function renderCollectionList() {
+    const box = $("#plCollectionList");
+    if (!box) return;
+    box.innerHTML = "";
+    const items = state.collections || [];
+    const empty = $("#plCollectionEmpty");
+    if (empty) empty.classList.toggle("hidden", items.length > 0);
+    items.forEach((item) => {
+      const li = document.createElement("li");
+      li.dataset.id = item.id;
+      li.title = collectionSummary(item.filters);
+      if (state.activeCollectionId === item.id) li.classList.add("active");
+      const name = document.createElement("span");
+      name.className = "collection-name";
+      name.textContent = item.name;
+      li.appendChild(name);
+      const count = state.collectionCounts[item.id];
+      if (count !== undefined) {
+        const badge = document.createElement("span");
+        badge.className = "tree-count";
+        badge.textContent = count;
+        li.appendChild(badge);
+      }
+      li.addEventListener("click", () => applyCollection(item));
+      li.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        showMenu(e.clientX, e.clientY, [
+          { label: "应用", onClick: () => applyCollection(item) },
+          { label: "重命名为…", onClick: () => renameCollection(item) },
+          { label: "更新为当前筛选", onClick: () => updateCollectionFilters(item) },
+          { label: "删除", onClick: () => deleteCollection(item) },
+        ]);
+      });
+      box.appendChild(li);
+    });
+  }
+
+  async function loadCollections() {
+    try {
+      const [list, counts] = await Promise.all([
+        API.get("/api/collections"),
+        API.get("/api/collections/counts"),
+      ]);
+      state.collections = (list && list.items) || [];
+      state.collectionCounts = (counts && counts.counts) || {};
+    } catch (e) {
+      state.collections = [];
+      state.collectionCounts = {};
+    }
+    renderCollectionList();
+  }
+
+  function applyCollection(item) {
+    const filters = item.filters || {};
+    state.libFilters.search = filters.search || "";
+    state.libFilters.status = filters.status || "all";
+    state.libFilters.duration = filters.duration || "all";
+    state.libFilters.tagNames = (filters.tagNames || []).slice();
+    state.libFilters.tagMode = filters.tagMode === "all" ? "all" : "any";
+    state.libFilters.sort = filters.sort || "name";
+    state.activeCollectionId = item.id;
+    saveLibFilters();
+    restoreLibFilterUI();
+    renderLibTagList();
+    renderCollectionList();
+    refreshPlaylistView(true);
+  }
+
+  function clearActiveCollection() {
+    if (state.activeCollectionId === null || state.activeCollectionId === undefined) return;
+    state.activeCollectionId = null;
+    renderCollectionList();
+  }
+
+  async function saveCurrentCollection() {
+    const name = await UI.prompt("合集名称");
+    if (!name || !name.trim()) return;
+    try {
+      await API.post("/api/collections", {
+        name: name.trim(),
+        filters: collectionFiltersFromState(),
+      });
+      await loadCollections();
+      UI.toast("已保存合集「" + name.trim() + "」");
+    } catch (e) {
+      UI.alert(e.message);
+    }
+  }
+
+  async function renameCollection(item) {
+    const name = await UI.prompt("重命名合集", item.name);
+    if (!name || !name.trim()) return;
+    try {
+      await API.put("/api/collections/" + item.id, { name: name.trim() });
+      await loadCollections();
+      UI.toast("已重命名合集");
+    } catch (e) {
+      UI.alert(e.message);
+    }
+  }
+
+  async function updateCollectionFilters(item) {
+    try {
+      await API.put("/api/collections/" + item.id, {
+        filters: collectionFiltersFromState(),
+      });
+      await loadCollections();
+      UI.toast("已更新合集筛选");
+    } catch (e) {
+      UI.alert(e.message);
+    }
+  }
+
+  async function deleteCollection(item) {
+    if (!(await UI.confirm("确定删除合集「" + item.name + "」吗？"))) return;
+    try {
+      await API.del("/api/collections/" + item.id);
+      if (state.activeCollectionId === item.id) state.activeCollectionId = null;
+      await loadCollections();
+      UI.toast("已删除合集");
+    } catch (e) {
+      UI.alert(e.message);
+    }
   }
 
   async function editTags(paths) {
@@ -2418,6 +2590,7 @@
       clearTimeout(libFilterTimer);
       libFilterTimer = setTimeout(() => {
         state.libFilters.search = $("#plSearch").value;
+        clearActiveCollection();
         saveLibFilters();
         refreshPlaylistView(true);
       }, 200);
@@ -2425,6 +2598,7 @@
     $$('input[name="plStatus"]').forEach((radio) =>
       radio.addEventListener("change", () => {
         state.libFilters.status = radio.value;
+        clearActiveCollection();
         saveLibFilters();
         refreshPlaylistView(true);
       })
@@ -2432,6 +2606,7 @@
     $$('input[name="plDuration"]').forEach((radio) =>
       radio.addEventListener("change", () => {
         state.libFilters.duration = radio.value;
+        clearActiveCollection();
         saveLibFilters();
         refreshPlaylistView(true);
       })
@@ -2439,12 +2614,14 @@
     $$('input[name="plTagMode"]').forEach((radio) =>
       radio.addEventListener("change", () => {
         state.libFilters.tagMode = radio.value;
+        clearActiveCollection();
         saveLibFilters();
         refreshPlaylistView(true);
       })
     );
     $("#plSort").addEventListener("change", () => {
       state.libFilters.sort = $("#plSort").value;
+      clearActiveCollection();
       saveLibFilters();
       refreshPlaylistView(true);
     });
@@ -2454,6 +2631,7 @@
       refreshPlaylistView(true);
     });
     $("#plResetFilters").addEventListener("click", resetLibFilters);
+    $("#plCollectionSave").addEventListener("click", saveCurrentCollection);
     $("#plRestore").addEventListener("click", restorePlaylistFromDb);
     $("#tagCreate").addEventListener("click", createTag);
     $("#tagNewName").addEventListener("keydown", (e) => {
@@ -2532,6 +2710,7 @@
     initSplitters();
     restoreLibFilterUI();
     await refreshTagFilter();
+    await loadCollections();
     await loadLibraryDirs();
     await loadDrives();
     await loadServerPlaylist();

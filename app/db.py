@@ -169,6 +169,17 @@ def init_db() -> None:
                 ")"
             )
             conn.execute("PRAGMA user_version = 7")
+            version = 7
+        if version < 8:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS collections ("
+                "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                "  name TEXT NOT NULL,"
+                "  filters TEXT NOT NULL,"
+                "  created_at INTEGER NOT NULL"
+                ")"
+            )
+            conn.execute("PRAGMA user_version = 8")
         conn.commit()
     finally:
         conn.close()
@@ -983,3 +994,80 @@ def remove_screenshot(screenshot_id: int):
             return None
         conn.execute("DELETE FROM screenshots WHERE id = ?", (screenshot_id,))
         return row["filename"]
+
+
+# ---------------------------------------------------------------- collections
+
+def _collection_dict(row) -> dict:
+    try:
+        filters = json.loads(row["filters"]) if row["filters"] else {}
+    except ValueError:
+        filters = {}
+    if not isinstance(filters, dict):
+        filters = {}
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "filters": filters,
+        "created_at": row["created_at"],
+    }
+
+
+def collections_list() -> list:
+    with connection() as conn:
+        rows = conn.execute(
+            "SELECT id, name, filters, created_at FROM collections ORDER BY id"
+        ).fetchall()
+        return [_collection_dict(row) for row in rows]
+
+
+def collection_by_id(cid: int):
+    with connection() as conn:
+        row = conn.execute(
+            "SELECT id, name, filters, created_at FROM collections WHERE id = ?",
+            (int(cid),),
+        ).fetchone()
+        return _collection_dict(row) if row else None
+
+
+def collection_add(name: str, filters: dict) -> dict:
+    with connection() as conn:
+        cur = conn.execute(
+            "INSERT INTO collections(name, filters, created_at) VALUES(?,?,?)",
+            (str(name), json.dumps(filters or {}, ensure_ascii=False), _now()),
+        )
+        row = conn.execute(
+            "SELECT id, name, filters, created_at FROM collections WHERE id = ?",
+            (cur.lastrowid,),
+        ).fetchone()
+        return _collection_dict(row)
+
+
+def collection_update(cid: int, name=None, filters=None):
+    sets = []
+    values = []
+    if name is not None:
+        sets.append("name = ?")
+        values.append(str(name))
+    if filters is not None:
+        sets.append("filters = ?")
+        values.append(json.dumps(filters, ensure_ascii=False))
+    with connection() as conn:
+        if sets:
+            values.append(int(cid))
+            cur = conn.execute(
+                f"UPDATE collections SET {', '.join(sets)} WHERE id = ?", values
+            )
+            if cur.rowcount <= 0:
+                return None
+        row = conn.execute(
+            "SELECT id, name, filters, created_at FROM collections WHERE id = ?",
+            (int(cid),),
+        ).fetchone()
+        return _collection_dict(row) if row else None
+
+
+def collection_delete(cid: int) -> bool:
+    with connection() as conn:
+        cur = conn.execute("DELETE FROM collections WHERE id = ?", (int(cid),))
+        return cur.rowcount > 0

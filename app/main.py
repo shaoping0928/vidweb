@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from . import config, db
-from .routers import browse, comments, dirs, files, library, recent, screenshots, search, settings, state, tags, tasks, thumbs, transcode
+from .routers import browse, collections, comments, dirs, files, library, recent, screenshots, search, settings, state, tags, tasks, thumbs, transcode
 
 MINIMAL_HTML = """
 <!DOCTYPE html>
@@ -39,6 +39,7 @@ async def no_cache_static(request, call_next):
 
 app.include_router(browse.router)
 app.include_router(library.router)
+app.include_router(collections.router)
 app.include_router(files.router)
 app.include_router(tags.router)
 app.include_router(comments.router)

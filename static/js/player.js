@@ -383,10 +383,15 @@
         } catch (e) {}
       }
       try {
-        const info = await API.get("/api/transcode/info");
-        if (this.streamMode && this.paths[this.index] === path && info.encoder_label) {
-          this.streamEncoderLabel = info.encoder_label;
-          this.showOsd("实时转码播放：" + info.encoder_label);
+        const plan = await API.get("/api/transcode/plan", { path: path });
+        if (this.streamMode && this.paths[this.index] === path) {
+          if (plan.mode === "remux") {
+            this.streamEncoderLabel = plan.encoder_label || "直通";
+            this.showOsd("直通播放（仅重封装，不转码）");
+          } else if (plan.encoder_label) {
+            this.streamEncoderLabel = plan.encoder_label;
+            this.showOsd("实时转码播放：" + plan.encoder_label);
+          }
         }
       } catch (e) {}
     },

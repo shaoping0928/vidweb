@@ -277,6 +277,49 @@ input[type="range"] {
   color: var(--dim);
 }
 
+.filter-collections {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 180px;
+  overflow-y: auto;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.filter-collections li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  user-select: none;
+}
+
+.filter-collections li:hover {
+  background: var(--hover);
+}
+
+.filter-collections li.active {
+  background: var(--selected);
+  color: #fff;
+}
+
+.filter-collections li .collection-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.filter-collections li .tree-count {
+  flex: 0 0 auto;
+  font-size: 11px;
+}
+
 /* ------------------------------------------------------------- tag page */
 
 .tag-row {
