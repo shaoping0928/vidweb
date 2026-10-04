@@ -25,16 +25,30 @@
     lastDanmakuTime: -1,
     laneFree: [],
     panelPage: 1,
+    arrowTimer: null,
+    arrowInterval: null,
+    arrowDirection: 0,
+    arrowAccel: false,
+    previewTimer: null,
+    previewBucket: -1,
+    ffmpegOn: false,
     el: {},
 
     async init() {
       if (this.initialized) return;
       this.initialized = true;
       if (window.Prefs && window.Prefs.load) await window.Prefs.load();
+      try {
+        const appConfig = await API.get("/api/config");
+        this.ffmpegOn = !!appConfig.ffmpeg;
+      } catch (e) {
+        this.ffmpegOn = false;
+      }
       const ids = [
         "video", "subtitleOverlay", "playerOsd", "playerHeader", "playerTitle",
         "playerStage", "playerMain", "playerBody", "playerPanel", "playerPlaylistView", "playerBack",
         "progressTrack", "progressFill", "progressHandle", "progressMarkers", "progressTip",
+        "progressWrap", "progressPreview", "progressPreviewImg", "progressPreviewTime",
         "timeNow", "timeTotal", "btnPrev", "btnPlay", "btnNext", "btnMode", "btnList", "btnAspect",
         "btnSnap", "btnMute", "volume", "volText", "speed", "speedText", "btnFullscreen",
         "btnLoadSub", "btnToggleSub", "btnAddComment", "btnAddCommentPanel", "btnPanelToggle",
@@ -145,7 +159,9 @@
         this.dragging = false;
       });
       track.addEventListener("pointerleave", () => {
-        if (!this.dragging) el.progressTip.classList.add("hidden");
+        if (this.dragging) return;
+        el.progressTip.classList.add("hidden");
+        this.hidePreview();
       });
 
       el.playerMain.addEventListener("pointermove", () => {
@@ -165,6 +181,10 @@
         }
       });
       document.addEventListener("keydown", (e) => this.onKey(e));
+      document.addEventListener("keyup", (e) => {
+        if (e.key === "ArrowLeft" || e.key === "ArrowRight") this.stopArrowHold();
+      });
+      window.addEventListener("blur", () => this.stopArrowHold());
       window.addEventListener("pagehide", () => this.beaconProgress());
     },
 
@@ -276,7 +296,78 @@
       );
     },
 
+    startArrowHold(direction) {
+      if (!this.paths.length) return;
+      if (this.arrowTimer || this.arrowInterval) return;
+      this.arrowDirection = direction;
+      this.arrowTimer = setTimeout(() => {
+        this.arrowTimer = null;
+        this.arrowAccel = true;
+        const base = Number(this.el.speed.value) / 10 || 1;
+        if (direction > 0) {
+          this.el.video.playbackRate = Math.min(4, Math.max(2, base * 3));
+          this.showOsd("快进 " + this.el.video.playbackRate.toFixed(1) + "x（松开恢复）");
+        } else {
+          this.el.video.playbackRate = base;
+          this.showOsd("快退 3.0x（松开恢复）");
+          this.arrowInterval = setInterval(() => {
+            const video = this.el.video;
+            if (!isFinite(video.duration) || video.duration <= 0) return;
+            video.currentTime = Math.max(0, video.currentTime - 0.45);
+          }, 150);
+        }
+      }, 350);
+    },
+
+    stopArrowHold() {
+      if (!this.arrowTimer && !this.arrowInterval && !this.arrowAccel) return;
+      if (this.arrowTimer) {
+        clearTimeout(this.arrowTimer);
+        this.arrowTimer = null;
+        this.seekRelative(this.arrowDirection > 0 ? 5000 : -5000);
+      }
+      if (this.arrowInterval) {
+        clearInterval(this.arrowInterval);
+        this.arrowInterval = null;
+      }
+      if (this.arrowAccel) {
+        this.arrowAccel = false;
+        this.applySpeed();
+      }
+    },
+
+    schedulePreview(seconds, leftPercent) {
+      const path = this.paths[this.index];
+      if (!path) return;
+      const box = this.el.progressPreview;
+      box.style.left = Math.min(100, Math.max(0, leftPercent)) + "%";
+      const bucket = Math.floor(seconds / 10);
+      if (bucket === this.previewBucket) return;
+      this.previewBucket = bucket;
+      clearTimeout(this.previewTimer);
+      this.previewTimer = setTimeout(() => {
+        const img = this.el.progressPreviewImg;
+        const url =
+          "/api/preview?path=" +
+          encodeURIComponent(path) +
+          "&t=" +
+          seconds.toFixed(1);
+        img.onload = () => box.classList.remove("hidden");
+        img.onerror = () => box.classList.add("hidden");
+        img.src = url;
+        this.el.progressPreviewTime.textContent = Fmt.time(seconds * 1000);
+      }, 160);
+    },
+
+    hidePreview() {
+      clearTimeout(this.previewTimer);
+      this.previewBucket = -1;
+      if (this.el.progressPreview) this.el.progressPreview.classList.add("hidden");
+    },
+
     close() {
+      this.stopArrowHold();
+      this.hidePreview();
       this.saveProgress();
       this.el.video.pause();
       if (window.APP && window.APP.setTab) window.APP.setTab("lib");
@@ -758,6 +849,7 @@
     onPointerDown(e) {
       if (!isFinite(this.el.video.duration) || this.el.video.duration <= 0) return;
       this.dragging = true;
+      this.hidePreview();
       this.el.progressTrack.setPointerCapture(e.pointerId);
       this.seekFromPointer(e);
     },
@@ -779,11 +871,18 @@
         left = (marker.position / (video.duration * 1000)) * 100;
       } else if (isFinite(video.duration) && video.duration > 0) {
         const ratio = x / rect.width;
-        text = Fmt.timePrecise(ratio * video.duration * 1000);
+        const seconds = ratio * video.duration;
         left = ratio * 100;
+        if (this.ffmpegOn) {
+          this.el.progressTip.classList.add("hidden");
+          this.schedulePreview(seconds, left);
+          return;
+        }
+        text = Fmt.timePrecise(seconds * 1000);
       } else {
         return;
       }
+      this.hidePreview();
       const tip = this.el.progressTip;
       tip.textContent = text;
       tip.style.left = Math.min(100, Math.max(0, left)) + "%";
@@ -797,6 +896,7 @@
         this.el.progressTrack.releasePointerCapture(e.pointerId);
       } catch (error) {}
       this.el.progressTip.classList.add("hidden");
+      this.hidePreview();
     },
 
     onKey(e) {
@@ -828,11 +928,11 @@
           break;
         case "ArrowLeft":
           e.preventDefault();
-          this.seekRelative(-5000);
+          if (!e.repeat) this.startArrowHold(-1);
           break;
         case "ArrowRight":
           e.preventDefault();
-          this.seekRelative(5000);
+          if (!e.repeat) this.startArrowHold(1);
           break;
         case "ArrowUp":
           e.preventDefault();
