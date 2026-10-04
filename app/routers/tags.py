@@ -10,11 +10,13 @@ router = APIRouter(prefix="/api")
 
 class TagCreate(BaseModel):
     name: str
+    parent_id: Optional[int] = None
 
 
 class TagUpdate(BaseModel):
     name: Optional[str] = None
     color: Optional[str] = None
+    parent_id: Optional[int] = None
 
 
 class FileTagsBody(BaseModel):
@@ -47,9 +49,12 @@ def create_tag(body: TagCreate):
     name = body.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="标签名不能为空")
-    tag_id = db.ensure_tag(name)
+    tag_id = db.ensure_tag(name, body.parent_id)
     if tag_id <= 0:
         raise HTTPException(status_code=400, detail="标签创建失败")
+    if body.parent_id:
+        if not db.set_tag_parent(tag_id, body.parent_id):
+            raise HTTPException(status_code=400, detail="父标签无效")
     return {"id": tag_id, "name": name}
 
 
@@ -60,6 +65,9 @@ def update_tag(tag_id: int, body: TagUpdate):
             raise HTTPException(status_code=400, detail="重命名失败（可能重名或为空）")
     if body.color is not None:
         db.set_tag_color(tag_id, body.color)
+    if "parent_id" in body.model_fields_set:
+        if not db.set_tag_parent(tag_id, body.parent_id):
+            raise HTTPException(status_code=400, detail="移动失败：不能移动到自身或其子标签下")
     return {"ok": True}
 
 

@@ -135,6 +135,7 @@
     <section id="page-tags" class="page">
       <div class="toolbar">
         <input id="tagNewName" placeholder="新标签名称">
+        <select id="tagNewParent" title="父标签"></select>
         <button id="tagCreate" class="primary">新建标签</button>
         <span class="spacer"></span>
         <span class="label" id="tagSummary"></span>
@@ -231,12 +232,8 @@
       </div>
       <div id="detailContent" class="detail-content"></div>
     </aside>
-  </main>
 
-  <footer id="statusbar"><span id="statusText"></span></footer>
-</div>
-
-<section id="page-player" class="page">
+  <section id="page-player" class="page">
   <div id="playerHeader">
     <button id="playerBack">返回媒体库</button>
     <span id="playerTitle"></span>
@@ -307,7 +304,11 @@
       </div>
     </aside>
   </div>
-</section>
+  </section>
+  </main>
+
+  <footer id="statusbar"><span id="statusText"></span></footer>
+</div>
 
 <input type="file" id="subtitleFileInput" accept=".srt,.ass,.ssa,.vtt" class="hidden">
 <div id="modalRoot"></div>

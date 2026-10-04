@@ -315,6 +315,24 @@ input[type="range"] {
   font-size: 12px;
 }
 
+.caret {
+  width: 14px;
+  flex: 0 0 auto;
+  text-align: center;
+  color: var(--dim);
+  cursor: pointer;
+  user-select: none;
+  font-size: 11px;
+}
+
+.caret.empty {
+  visibility: hidden;
+}
+
+.filter-tags .check {
+  padding-left: 0;
+}
+
 .lib-filters input[type="text"],
 .lib-filters input:not([type]) {
   width: 100%;

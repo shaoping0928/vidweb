@@ -16,6 +16,8 @@
     visiblePaths: [],
     libFilters: loadLibFilters(),
     tags: [],
+    tagSubtrees: new Map(),
+    tagExpanded: JSON.parse(localStorage.getItem("mw/tagExpanded") || "{}"),
     config: {},
     detailPath: "",
     searchItems: [],
@@ -38,6 +40,61 @@
       .replace(/\//g, "\\")
       .replace(/\\+$/, "")
       .toLowerCase();
+  }
+
+  function buildTagTree(tags) {
+    const byId = new Map();
+    for (const tag of tags || []) byId.set(tag.id, Object.assign({}, tag, { children: [] }));
+    const roots = [];
+    for (const node of byId.values()) {
+      const parent = node.parent_id ? byId.get(node.parent_id) : null;
+      if (parent) parent.children.push(node);
+      else roots.push(node);
+    }
+    const sortNodes = (list) => {
+      list.sort((a, b) => collator.compare(a.name, b.name));
+      list.forEach((node) => sortNodes(node.children));
+    };
+    sortNodes(roots);
+    return roots;
+  }
+
+  function computeTagSubtrees(tags) {
+    const children = new Map();
+    for (const tag of tags || []) {
+      const key = tag.parent_id || 0;
+      if (!children.has(key)) children.set(key, []);
+      children.get(key).push(tag.id);
+    }
+    const result = new Map();
+    for (const tag of tags || []) {
+      const set = new Set();
+      const stack = [tag.id];
+      while (stack.length) {
+        const current = stack.pop();
+        if (set.has(current)) continue;
+        set.add(current);
+        for (const child of children.get(current) || []) stack.push(child);
+      }
+      result.set(tag.id, set);
+    }
+    return result;
+  }
+
+  function tagDepthList(tags) {
+    const out = [];
+    const walk = (nodes, depth) => {
+      for (const node of nodes) {
+        out.push({ tag: node, depth });
+        walk(node.children, depth + 1);
+      }
+    };
+    walk(buildTagTree(tags), 0);
+    return out;
+  }
+
+  function saveTagExpanded() {
+    localStorage.setItem("mw/tagExpanded", JSON.stringify(state.tagExpanded));
   }
 
   function loadLibFilters() {
@@ -637,11 +694,21 @@
       if (filters.duration === "medium" && !(duration > 600000 && duration <= 1800000)) return false;
       if (filters.duration === "long" && !(duration > 1800000)) return false;
       if (tagNames.length) {
-        const own = item.tags || [];
-        const owned = new Set(own.map((t) => t.toLowerCase()));
-        const hit = tagModeAll
-          ? tagNames.every((t) => owned.has(t.toLowerCase()))
-          : tagNames.some((t) => owned.has(t.toLowerCase()));
+        const nameToId = new Map(state.tags.map((t) => [t.name, t.id]));
+        const ownIds = new Set(
+          (item.tags || []).map((name) => nameToId.get(name)).filter((id) => id !== undefined)
+        );
+        const matchOne = (name) => {
+          const id = nameToId.get(name);
+          if (id === undefined) return false;
+          const subtree = state.tagSubtrees.get(id);
+          if (!subtree) return ownIds.has(id);
+          for (const own of ownIds) {
+            if (subtree.has(own)) return true;
+          }
+          return false;
+        };
+        const hit = tagModeAll ? tagNames.every(matchOne) : tagNames.some(matchOne);
         if (!hit) return false;
       }
       return true;
@@ -745,6 +812,7 @@
     } catch (e) {
       state.tags = [];
     }
+    state.tagSubtrees = computeTagSubtrees(state.tags);
     const valid = new Set(state.tags.map((t) => t.name));
     state.libFilters.tagNames = (state.libFilters.tagNames || []).filter((n) =>
       valid.has(n)
@@ -757,36 +825,57 @@
     if (!box) return;
     box.innerHTML = "";
     $("#plTagEmpty").classList.toggle("hidden", state.tags.length > 0);
-    for (const tag of state.tags) {
+    const renderNode = (node, depth) => {
+      const hasChildren = node.children.length > 0;
+      const expanded = state.tagExpanded[node.id] !== false;
       const label = document.createElement("label");
       label.className = "check";
+      label.style.paddingLeft = depth * 12 + "px";
+      const caret = document.createElement("span");
+      caret.className = "caret" + (hasChildren ? "" : " empty");
+      caret.textContent = hasChildren ? (expanded ? "▾" : "▸") : "•";
+      caret.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!hasChildren) return;
+        state.tagExpanded[node.id] = !expanded;
+        saveTagExpanded();
+        renderLibTagList();
+      });
       const checkbox = document.createElement("input");
       checkbox.type = "checkbox";
-      checkbox.checked = state.libFilters.tagNames.includes(tag.name);
+      checkbox.checked = state.libFilters.tagNames.includes(node.name);
       const dot = document.createElement("span");
       dot.className = "dot";
-      dot.style.background = tag.color || "#5c636e";
+      dot.style.background = node.color || "#5c636e";
       const name = document.createElement("span");
-      name.textContent = tag.name;
+      name.textContent = node.name;
       const count = document.createElement("span");
       count.className = "count";
-      count.textContent = tag.file_count;
-      label.append(checkbox, dot, name, count);
+      count.textContent = hasChildren ? node.subtree_count : node.file_count;
+      if (hasChildren) {
+        count.title = "自身 " + node.file_count + " 个，含子标签共 " + node.subtree_count + " 个";
+      }
+      label.append(caret, checkbox, dot, name, count);
       checkbox.addEventListener("change", () => {
         if (checkbox.checked) {
-          if (!state.libFilters.tagNames.includes(tag.name)) {
-            state.libFilters.tagNames.push(tag.name);
+          if (!state.libFilters.tagNames.includes(node.name)) {
+            state.libFilters.tagNames.push(node.name);
           }
         } else {
           state.libFilters.tagNames = state.libFilters.tagNames.filter(
-            (n) => n !== tag.name
+            (n) => n !== node.name
           );
         }
         saveLibFilters();
         refreshPlaylistView();
       });
       box.appendChild(label);
-    }
+      if (hasChildren && expanded) {
+        node.children.forEach((child) => renderNode(child, depth + 1));
+      }
+    };
+    buildTagTree(state.tags).forEach((root) => renderNode(root, 0));
   }
 
   async function editTags(paths) {
@@ -812,9 +901,10 @@
     }
     const listWrap = document.createElement("div");
     listWrap.className = "check-list";
-    const addRow = (name, color, checked, count) => {
+    const addRow = (name, color, checked, count, depth) => {
       const row = document.createElement("label");
       row.className = "check-row";
+      if (depth) row.style.paddingLeft = 6 + depth * 14 + "px";
       const cb = document.createElement("input");
       cb.type = "checkbox";
       cb.checked = checked;
@@ -834,10 +924,11 @@
       listWrap.appendChild(row);
       infos.push({ name, cb });
     };
-    for (const tag of data.tags || []) {
+    for (const entry of tagDepthList(data.tags || [])) {
+      const tag = entry.tag;
       const count = counts[tag.name] || 0;
       const checked = batch ? count === paths.length : count > 0;
-      addRow(tag.name, tag.color, checked, count);
+      addRow(tag.name, tag.color, checked, count, entry.depth);
     }
     body.appendChild(listWrap);
     const newInput = document.createElement("input");
@@ -885,6 +976,30 @@
     });
   }
 
+  function renderTagParentSelect() {
+    const select = $("#tagNewParent");
+    if (!select) return;
+    const current = select.value;
+    select.innerHTML = "";
+    const root = document.createElement("option");
+    root.value = "";
+    root.textContent = "顶层标签";
+    select.appendChild(root);
+    const walk = (nodes, depth) => {
+      for (const node of nodes) {
+        const option = document.createElement("option");
+        option.value = node.id;
+        option.textContent = "　".repeat(depth) + node.name;
+        select.appendChild(option);
+        walk(node.children, depth + 1);
+      }
+    };
+    walk(buildTagTree(state.tags), 0);
+    if (current && Array.from(select.options).some((o) => o.value === current)) {
+      select.value = current;
+    }
+  }
+
   async function renderTagManagePage() {
     let data;
     try {
@@ -894,6 +1009,8 @@
       return;
     }
     state.tags = data.items;
+    state.tagSubtrees = computeTagSubtrees(state.tags);
+    renderTagParentSelect();
     const list = $("#tagManageList");
     list.innerHTML = "";
     $("#tagSummary").textContent = data.items.length
@@ -912,27 +1029,43 @@
       await refreshTagFilter();
       await refreshPlaylistView();
     };
-    for (const tag of data.items) {
+    const renderNode = (node, depth) => {
+      const hasChildren = node.children.length > 0;
+      const expanded = state.tagExpanded[node.id] !== false;
       const li = document.createElement("li");
       li.className = "tag-row";
+      li.style.paddingLeft = 8 + depth * 16 + "px";
+      const caret = document.createElement("span");
+      caret.className = "caret" + (hasChildren ? "" : " empty");
+      caret.textContent = hasChildren ? (expanded ? "▾" : "▸") : "•";
+      caret.addEventListener("click", () => {
+        if (!hasChildren) return;
+        state.tagExpanded[node.id] = !expanded;
+        saveTagExpanded();
+        renderTagManagePage();
+      });
       const dot = document.createElement("span");
       dot.className = "dot";
-      dot.style.background = tag.color || "#5c636e";
+      dot.style.background = node.color || "#5c636e";
       const name = document.createElement("span");
       name.className = "tag-name";
-      name.textContent = tag.name;
+      name.textContent = node.name;
       const count = document.createElement("span");
       count.className = "tag-count";
-      count.textContent = tag.file_count + " 个文件";
+      if (hasChildren) {
+        count.textContent = node.subtree_count + " 个文件（自身 " + node.file_count + "）";
+      } else {
+        count.textContent = node.file_count + " 个文件";
+      }
       const actions = document.createElement("span");
       actions.className = "tag-actions";
       const renameBtn = document.createElement("button");
       renameBtn.textContent = "重命名";
       renameBtn.addEventListener("click", async () => {
-        const value = await UI.prompt("新名称", tag.name);
+        const value = await UI.prompt("新名称", node.name);
         if (!value || !value.trim()) return;
         try {
-          await API.put("/api/tags/" + tag.id, { name: value.trim() });
+          await API.put("/api/tags/" + node.id, { name: value.trim() });
           await afterChange();
         } catch (e) {
           UI.alert(e.message);
@@ -943,13 +1076,13 @@
       colorBtn.addEventListener("click", () => {
         const input = document.createElement("input");
         input.type = "color";
-        input.value = tag.color || "#3d8bfd";
+        input.value = node.color || "#3d8bfd";
         input.style.position = "fixed";
         input.style.left = "-100px";
         document.body.appendChild(input);
         input.addEventListener("input", async () => {
           try {
-            await API.put("/api/tags/" + tag.id, { color: input.value });
+            await API.put("/api/tags/" + node.id, { color: input.value });
             await afterChange();
           } catch (e) {
             UI.alert(e.message);
@@ -958,29 +1091,99 @@
         input.addEventListener("change", () => input.remove());
         input.click();
       });
-      const delBtn = document.createElement("button");
-      delBtn.textContent = "删除";
-      delBtn.addEventListener("click", async () => {
-        if (!(await UI.confirm("确定删除标签「" + tag.name + "」吗？所有文件上的该标签都会被移除。"))) return;
+      const childBtn = document.createElement("button");
+      childBtn.textContent = "子标签";
+      childBtn.addEventListener("click", async () => {
+        const value = await UI.prompt("新建子标签（父标签：" + node.name + "）");
+        if (!value || !value.trim()) return;
         try {
-          await API.del("/api/tags/" + tag.id);
+          await API.post("/api/tags", { name: value.trim(), parent_id: node.id });
+          state.tagExpanded[node.id] = true;
+          saveTagExpanded();
           await afterChange();
         } catch (e) {
           UI.alert(e.message);
         }
       });
-      actions.append(renameBtn, colorBtn, delBtn);
-      li.append(dot, name, count, actions);
+      const moveBtn = document.createElement("button");
+      moveBtn.textContent = "移动";
+      moveBtn.addEventListener("click", () => {
+        const forbidden = state.tagSubtrees.get(node.id) || new Set([node.id]);
+        const select = document.createElement("select");
+        select.style.width = "100%";
+        const rootOption = document.createElement("option");
+        rootOption.value = "";
+        rootOption.textContent = "顶层标签";
+        select.appendChild(rootOption);
+        const walk = (nodes, depthLevel) => {
+          for (const item of nodes) {
+            if (!forbidden.has(item.id)) {
+              const option = document.createElement("option");
+              option.value = item.id;
+              option.textContent = "　".repeat(depthLevel) + item.name;
+              select.appendChild(option);
+            }
+            walk(item.children, depthLevel + 1);
+          }
+        };
+        walk(buildTagTree(state.tags), 0);
+        const wrap = document.createElement("div");
+        const label = document.createElement("div");
+        label.className = "modal-label";
+        label.textContent = "把「" + node.name + "」移动到：";
+        wrap.append(label, select);
+        UI.openModal({
+          title: "移动标签",
+          body: wrap,
+          width: 380,
+          footer: [
+            { label: "取消" },
+            {
+              label: "确定",
+              primary: true,
+              onClick: async () => {
+                const value = select.value ? Number(select.value) : null;
+                try {
+                  await API.put("/api/tags/" + node.id, { parent_id: value });
+                  await afterChange();
+                } catch (e) {
+                  UI.alert(e.message);
+                }
+              },
+            },
+          ],
+        });
+      });
+      const delBtn = document.createElement("button");
+      delBtn.textContent = "删除";
+      delBtn.addEventListener("click", async () => {
+        const extra = hasChildren ? "其子标签将变为顶层标签。" : "";
+        if (!(await UI.confirm("确定删除标签「" + node.name + "」吗？所有文件上的该标签都会被移除。" + extra))) return;
+        try {
+          await API.del("/api/tags/" + node.id);
+          await afterChange();
+        } catch (e) {
+          UI.alert(e.message);
+        }
+      });
+      actions.append(renameBtn, colorBtn, childBtn, moveBtn, delBtn);
+      li.append(caret, dot, name, count, actions);
       list.appendChild(li);
-    }
+      if (hasChildren && expanded) {
+        node.children.forEach((child) => renderNode(child, depth + 1));
+      }
+    };
+    buildTagTree(state.tags).forEach((root) => renderNode(root, 0));
   }
 
   async function createTag() {
     const input = $("#tagNewName");
     const name = input.value.trim();
     if (!name) return;
+    const parentValue = $("#tagNewParent") ? $("#tagNewParent").value : "";
+    const parentId = parentValue ? Number(parentValue) : null;
     try {
-      await API.post("/api/tags", { name: name });
+      await API.post("/api/tags", { name: name, parent_id: parentId });
       input.value = "";
       await renderTagManagePage();
       await refreshTagFilter();

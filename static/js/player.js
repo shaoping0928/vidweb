@@ -30,7 +30,7 @@
       if (this.initialized) return;
       this.initialized = true;
       const ids = [
-        "playerPage", "video", "subtitleOverlay", "playerOsd", "playerHeader", "playerTitle",
+        "video", "subtitleOverlay", "playerOsd", "playerHeader", "playerTitle",
         "playerStage", "playerMain", "playerBody", "playerPanel", "playerPlaylistView", "playerBack",
         "progressTrack", "progressFill", "progressHandle", "progressMarkers", "progressTip",
         "timeNow", "timeTotal", "btnPrev", "btnPlay", "btnNext", "btnMode", "btnList", "btnAspect",
@@ -41,6 +41,7 @@
       ids.forEach((id) => {
         this.el[id] = document.getElementById(id);
       });
+      this.el.playerPage = document.getElementById("page-player");
       let defaults = {};
       try {
         defaults = JSON.parse(localStorage.getItem("mw/defaults") || "{}");

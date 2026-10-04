@@ -49,6 +49,12 @@ def init_db() -> None:
         if version < 2:
             conn.execute("ALTER TABLE files ADD COLUMN thumbnail TEXT DEFAULT ''")
             conn.execute("PRAGMA user_version = 2")
+            version = 2
+        if version < 3:
+            conn.execute(
+                "ALTER TABLE tags ADD COLUMN parent_id INTEGER REFERENCES tags(id) ON DELETE SET NULL"
+            )
+            conn.execute("PRAGMA user_version = 3")
         conn.commit()
     finally:
         conn.close()
@@ -155,16 +161,48 @@ def clear_recent() -> None:
 
 # ---------------------------------------------------------------- tags
 
-def ensure_tag(name: str) -> int:
+def _tag_subtree_ids(conn, tag_id: int) -> set:
+    rows = conn.execute("SELECT id, parent_id FROM tags").fetchall()
+    children = {}
+    for row in rows:
+        children.setdefault(row["parent_id"] or 0, []).append(row["id"])
+    result = set()
+    stack = [tag_id]
+    while stack:
+        current = stack.pop()
+        if current in result:
+            continue
+        result.add(current)
+        stack.extend(children.get(current, []))
+    return result
+
+
+def _files_for_tag_ids(conn, tag_ids) -> list:
+    ids = [int(t) for t in tag_ids]
+    if not ids:
+        return []
+    placeholders = ",".join("?" for _ in ids)
+    rows = conn.execute(
+        "SELECT DISTINCT f.path FROM files f JOIN file_tags ft ON ft.file_id = f.id"
+        f" WHERE ft.tag_id IN ({placeholders}) ORDER BY f.name",
+        ids,
+    ).fetchall()
+    return [r["path"] for r in rows]
+
+
+def ensure_tag(name: str, parent_id=None) -> int:
     name = (name or "").strip()
     if not name:
         return -1
+    if parent_id is not None and int(parent_id) <= 0:
+        parent_id = None
     with connection() as conn:
         row = conn.execute("SELECT id FROM tags WHERE name = ?", (name,)).fetchone()
         if row:
             return row["id"]
         cur = conn.execute(
-            "INSERT INTO tags(name, created_at) VALUES(?,?)", (name, _now())
+            "INSERT INTO tags(name, color, parent_id, created_at) VALUES(?,?,?,?)",
+            (name, None, parent_id, _now()),
         )
         return cur.lastrowid
 
@@ -197,14 +235,58 @@ def set_tag_color(tag_id: int, color: str) -> bool:
         return True
 
 
+def set_tag_parent(tag_id: int, parent_id) -> bool:
+    if tag_id <= 0:
+        return False
+    if parent_id is not None and int(parent_id) <= 0:
+        parent_id = None
+    with connection() as conn:
+        if parent_id is not None:
+            exists = conn.execute("SELECT id FROM tags WHERE id = ?", (parent_id,)).fetchone()
+            if not exists:
+                return False
+            if int(parent_id) == tag_id or int(parent_id) in _tag_subtree_ids(conn, tag_id):
+                return False
+        conn.execute("UPDATE tags SET parent_id = ? WHERE id = ?", (parent_id, tag_id))
+        return True
+
+
 def all_tags() -> list:
     with connection() as conn:
-        rows = conn.execute(
-            "SELECT t.id, t.name, t.color,"
-            " (SELECT COUNT(*) FROM file_tags ft WHERE ft.tag_id = t.id) AS file_count"
-            " FROM tags t ORDER BY t.name"
-        ).fetchall()
-        return [dict(r) for r in rows]
+        rows = [dict(r) for r in conn.execute("SELECT id, name, color, parent_id FROM tags")]
+        links = conn.execute("SELECT file_id, tag_id FROM file_tags").fetchall()
+        by_tag = {}
+        for link in links:
+            by_tag.setdefault(link["tag_id"], set()).add(link["file_id"])
+        children = {}
+        for row in rows:
+            children.setdefault(row["parent_id"] or 0, []).append(row)
+        for group in children.values():
+            group.sort(key=lambda r: r["name"].lower())
+        ordered = []
+
+        def walk(node):
+            subtree_files = set()
+            stack = [node["id"]]
+            seen = set()
+            while stack:
+                current = stack.pop()
+                if current in seen:
+                    continue
+                seen.add(current)
+                subtree_files |= by_tag.get(current, set())
+                for child in children.get(current, []):
+                    stack.append(child["id"])
+            item = dict(node)
+            item["file_count"] = len(by_tag.get(node["id"], set()))
+            item["subtree_count"] = len(subtree_files)
+            ordered.append(item)
+            for child in children.get(node["id"], []):
+                walk(child)
+
+        for root in children.get(0, []):
+            walk(root)
+        return ordered
 
 
 def tags_for_file(file_id: int) -> list:
@@ -243,16 +325,12 @@ def set_file_tags(file_id: int, tag_names: list) -> bool:
         return True
 
 
-def files_for_tag(tag_id: int) -> list:
+def files_for_tag(tag_id: int, include_children: bool = True) -> list:
     if tag_id <= 0:
         return []
     with connection() as conn:
-        rows = conn.execute(
-            "SELECT f.path FROM files f JOIN file_tags ft ON ft.file_id = f.id"
-            " WHERE ft.tag_id = ? ORDER BY f.name",
-            (tag_id,),
-        ).fetchall()
-        return [r["path"] for r in rows]
+        ids = _tag_subtree_ids(conn, tag_id) if include_children else {tag_id}
+        return _files_for_tag_ids(conn, ids)
 
 
 def search(keyword: str, limit: int = 200) -> list:
@@ -267,13 +345,10 @@ def search(keyword: str, limit: int = 200) -> list:
         ):
             matches.setdefault(row["path"], []).append("文件名")
         for row in conn.execute(
-            "SELECT DISTINCT f.path, t.name FROM files f"
-            " JOIN file_tags ft ON ft.file_id = f.id"
-            " JOIN tags t ON t.id = ft.tag_id"
-            " WHERE t.name LIKE ? LIMIT ?",
-            (pattern, limit),
-        ):
-            matches.setdefault(row["path"], []).append("标签: " + row["name"])
+            "SELECT id, name FROM tags WHERE name LIKE ? LIMIT ?", (pattern, limit)
+        ).fetchall():
+            for path in _files_for_tag_ids(conn, _tag_subtree_ids(conn, row["id"])):
+                matches.setdefault(path, []).append("标签: " + row["name"])
         for row in conn.execute(
             "SELECT DISTINCT f.path, c.text FROM files f"
             " JOIN comments c ON c.file_id = f.id"
