@@ -34,6 +34,7 @@
     pendingSeekMs: null,
     streamEncoderLabel: "",
     streamWatchdog: null,
+    streamRetries: 0,
     playbackChecked: false,
     frameSeen: false,
     panelTab: "info",
@@ -139,6 +140,9 @@
       video.addEventListener("timeupdate", () => {
         this.updateProgress();
         this.checkUndecodable();
+        if (this.streamRetries && this.streamMode && video.currentTime > 10) {
+          this.streamRetries = 0;
+        }
         if (Date.now() - this.lastSaveTs > 5000) {
           this.lastSaveTs = Date.now();
           this.saveProgress();
@@ -160,8 +164,13 @@
         const path = this.paths[this.index];
         if (!path) return;
         if (this.streamMode) {
-          this.stopStream();
-          this.showOsd("实时转码播放失败，请检查设置中的转码硬件");
+          if (this.trySkipBadSegment()) return;
+          const gaveUp = this.streamRetries >= 4;
+          this.showOsd(
+            gaveUp
+              ? "损坏片段过多，播放中止，可拖动进度条跳过"
+              : "实时转码播放失败（文件损坏或转码设置异常），可拖动进度条重试"
+          );
           return;
         }
         try {
@@ -258,6 +267,7 @@
       this.streamMode = false;
       this.streamOffsetMs = 0;
       this.streamDurationMs = 0;
+      this.streamRetries = 0;
       this.pendingSeekMs = null;
       this.markers = [];
       this.renderMarkers();
@@ -315,6 +325,11 @@
     },
 
     onEnded() {
+      if (this.streamMode) {
+        const total = this.videoDurationMs();
+        const pos = this.videoPositionMs();
+        if (total > 0 && pos < total - 2000 && this.trySkipBadSegment()) return;
+      }
       this.saveProgress();
       this.showOsd("播放结束");
     },
@@ -344,6 +359,7 @@
       const record = this.currentDetail && this.currentDetail.record;
       this.streamMode = true;
       this.playbackChecked = true;
+      this.streamRetries = 0;
       this.streamOffsetMs = Math.max(0, startMs);
       this.streamDurationMs = (record && record.duration_ms) || 0;
       this.pendingSeekMs = null;
@@ -353,14 +369,7 @@
       video.play().catch(() => {});
       this.updateProgress();
       this.showOsd("已切换实时转码播放（不占用磁盘）");
-      this.clearStreamWatchdog();
-      this.streamWatchdog = setTimeout(() => {
-        if (!this.streamMode || this.paths[this.index] !== path) return;
-        const current = this.el.video;
-        if (current.readyState >= 2 || current.currentTime > 0.5) return;
-        this.stopStream();
-        this.showOsd("实时转码启动超时，请检查转码硬件设置");
-      }, 15000);
+      this.armStreamWatchdog(path);
       if (!this.streamDurationMs) {
         try {
           const detail = await API.get("/api/files/detail", { path: path });
@@ -385,9 +394,10 @@
       } catch (e) {}
     },
 
-    restartStreamAt(ms) {
+    restartStreamAt(ms, keepRetries) {
       const path = this.paths[this.index];
       if (!path || !this.streamMode) return;
+      if (!keepRetries) this.streamRetries = 0;
       const duration = this.videoDurationMs();
       let target = Math.max(0, Math.round(ms));
       if (duration > 0) target = Math.min(target, duration - 1000);
@@ -396,6 +406,32 @@
       this.el.video.src = this.transcodeStreamUrl(path, target);
       this.el.video.play().catch(() => {});
       this.updateProgress();
+      this.armStreamWatchdog(path);
+    },
+
+    trySkipBadSegment() {
+      if (this.streamRetries >= 4) return false;
+      const video = this.el.video;
+      const playedMs = Math.round((video.currentTime || 0) * 1000);
+      if (playedMs < 500 && this.streamOffsetMs <= 0) return false;
+      const total = this.videoDurationMs();
+      const target = this.videoPositionMs() + 8000;
+      if (total > 0 && target >= total - 1000) return false;
+      this.streamRetries += 1;
+      this.showOsd("跳过损坏片段，继续播放…");
+      this.restartStreamAt(target, true);
+      return true;
+    },
+
+    armStreamWatchdog(path) {
+      this.clearStreamWatchdog();
+      this.streamWatchdog = setTimeout(() => {
+        if (!this.streamMode || this.paths[this.index] !== path) return;
+        const current = this.el.video;
+        if (current.readyState >= 2 || current.currentTime > 0.5) return;
+        this.stopStream();
+        this.showOsd("实时转码启动超时，请检查转码硬件设置");
+      }, 15000);
     },
 
     applySeekMs(ms) {
@@ -476,6 +512,7 @@
       this.clearStreamWatchdog();
       if (!this.streamMode) return;
       this.streamMode = false;
+      this.streamRetries = 0;
       this.streamOffsetMs = 0;
       this.pendingSeekMs = null;
       const video = this.el.video;

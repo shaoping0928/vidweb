@@ -122,6 +122,8 @@ def stream(path: str, start_ms: int = 0, plan_info: dict = None):
     start_s = max(0, int(start_ms)) / 1000.0
     cmd = [
         ffmpeg, "-hide_banner", "-loglevel", "error",
+        "-fflags", "+discardcorrupt+genpts",
+        "-err_detect", "ignore_err",
         "-ss", f"{start_s:.3f}",
         "-i", path,
     ]
