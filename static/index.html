@@ -122,6 +122,11 @@
         </aside>
         <div class="splitter" data-resize-target="libFilters" data-min="170" data-max="480" title="拖动调整宽度，双击恢复默认"></div>
         <div class="list-col">
+          <div class="list-toolbar">
+            <span id="libSelInfo" class="label">未选择</span>
+            <button id="libSelectVisible">全选当前显示</button>
+            <button id="plRemoveSelected" disabled>移除选中</button>
+          </div>
           <ul id="playlistView" class="list media-list"></ul>
           <div class="pager" id="playlistPager"></div>
         </div>

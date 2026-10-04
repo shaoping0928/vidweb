@@ -483,6 +483,14 @@
     $$(".list li").forEach((li) => {
       li.classList.toggle("selected", state.selectedPaths.includes(li.dataset.path));
     });
+    const info = $("#libSelInfo");
+    if (info) {
+      info.textContent = state.selectedPaths.length
+        ? "已选 " + state.selectedPaths.length + " 项"
+        : "未选择";
+    }
+    const removeBtn = $("#plRemoveSelected");
+    if (removeBtn) removeBtn.disabled = !state.selectedPaths.length;
   }
 
   function handleItemClick(e, listEl, paths, li) {
@@ -1061,10 +1069,16 @@
   }
 
   async function addFilesToPlaylist(paths) {
-    if (!paths || !paths.length) return 0;
+    const targets = (paths || []).filter(Boolean);
+    if (!targets.length) return 0;
     try {
-      const res = await API.post("/api/playlist/add", { paths });
-      if (res.added) await refreshPlaylistView();
+      const res = await API.post("/api/playlist/add", { paths: targets });
+      if (res.added) {
+        await refreshPlaylistView();
+        UI.toast("已加入播放列表 " + res.added + " 个");
+      } else {
+        UI.toast("所选项目已在播放列表中");
+      }
       return res.added;
     } catch (e) {
       UI.alert(e.message);
@@ -1301,9 +1315,14 @@
   }
 
   async function removeFromPlaylist(paths) {
+    const targets = (paths || []).filter(Boolean);
+    if (!targets.length) return;
     try {
-      await API.post("/api/playlist/remove", { paths });
+      const res = await API.post("/api/playlist/remove", { paths: targets });
+      state.selectedPaths = [];
+      updateSelectionStyles();
       await refreshPlaylistView();
+      UI.toast("已从播放列表移除 " + (res.removed || 0) + " 个");
     } catch (e) {
       UI.alert(e.message);
     }
@@ -1586,7 +1605,7 @@
     }
   }
 
-  async function editTags(paths) {
+  async function editTags(paths, onSaved) {
     paths = (paths || []).filter(Boolean);
     if (!paths.length) return;
     let data;
@@ -1675,6 +1694,7 @@
               await refreshPlaylistView();
               if (state.detailPath) showDetailsFor(state.detailPath);
               UI.toast("标签已保存");
+              if (typeof onSaved === "function") onSaved();
             } catch (e) {
               UI.alert(e.message);
             }
@@ -1951,7 +1971,20 @@
       row("媒体信息", "尚未播放，暂无记录");
     }
     html += "</table>";
+    html +=
+      "<div class='detail-actions'>" +
+      "<button id='detailAddPlaylist'>加入播放列表</button>" +
+      "<button id='detailRemovePlaylist'>从播放列表移除</button>" +
+      "</div>";
     content.innerHTML = html;
+    const addBtn = content.querySelector("#detailAddPlaylist");
+    if (addBtn) {
+      addBtn.addEventListener("click", () => addFilesToPlaylist([data.path]));
+    }
+    const removeBtn = content.querySelector("#detailRemovePlaylist");
+    if (removeBtn) {
+      removeBtn.addEventListener("click", () => removeFromPlaylist([data.path]));
+    }
   }
 
   function setDetailVisible(show) {
@@ -2401,10 +2434,16 @@
       if (!li) return;
       const path = li.dataset.path;
       if (li.dataset.isdir === "true") {
+        const dirVideos = state.entries.filter((x) => x.is_video).map((x) => x.path);
         showMenu(e.clientX, e.clientY, [
           { label: "进入文件夹", onClick: () => browse(path) },
           { label: "添加为库目录", onClick: () => addLibraryDir(path) },
           { label: "扫描入库", onClick: () => scanDirPath(path) },
+          {
+            label: "本目录视频加入播放列表",
+            enabled: dirVideos.length > 0,
+            onClick: () => addFilesToPlaylist(dirVideos),
+          },
           { label: "在资源管理器中显示", onClick: () => explore(path) },
           "-",
           { label: "刷新", onClick: () => browse(state.path) },
@@ -2426,6 +2465,16 @@
         },
         { label: "查看详情", onClick: () => showDetailsInPanel(path) },
         { label: "生成缩略图", enabled: li.classList.contains("video"), onClick: () => requestThumbs([path]) },
+        {
+          label: "加入播放列表",
+          enabled: selectedVideos.length > 0,
+          onClick: () => addFilesToPlaylist(selectedVideos),
+        },
+        {
+          label: "从播放列表移除",
+          enabled: selectedVideos.length > 0,
+          onClick: () => removeFromPlaylist(selectedVideos),
+        },
         { label: "在资源管理器中显示", onClick: () => explore(path) },
         "-",
         { label: "刷新", onClick: () => browse(state.path) },
@@ -2543,6 +2592,14 @@
           },
         },
         { label: "查看详情", onClick: () => showDetailsInPanel(li.dataset.path) },
+        {
+          label: "加入播放列表",
+          onClick: () => {
+            const exists = new Set(state.recentItems.filter((i) => i.exists).map((i) => i.path));
+            addFilesToPlaylist(selectedOr(li.dataset.path).filter((p) => exists.has(p)));
+          },
+        },
+        { label: "从播放列表移除", onClick: () => removeFromPlaylist(selectedOr(li.dataset.path)) },
         { label: "在资源管理器中显示", onClick: () => explore(li.dataset.path) },
       ]);
     });
@@ -2581,6 +2638,15 @@
         { label: "编辑标签...", onClick: () => editTags([path]) },
         { label: "查看详情", onClick: () => showDetailsInPanel(path) },
         { label: "生成缩略图", onClick: () => requestThumbs([path]) },
+        {
+          label: "加入播放列表",
+          enabled: state.searchItems.some((i) => i.path === path && i.exists),
+          onClick: () => {
+            const exists = new Set(state.searchItems.filter((i) => i.exists).map((i) => i.path));
+            addFilesToPlaylist(selectedOr(path).filter((p) => exists.has(p)));
+          },
+        },
+        { label: "从播放列表移除", onClick: () => removeFromPlaylist(selectedOr(path)) },
         { label: "在资源管理器中显示", onClick: () => explore(path) },
       ]);
     });
@@ -2625,6 +2691,24 @@
       saveLibFilters();
       refreshPlaylistView(true);
     });
+    const selectVisible = $("#libSelectVisible");
+    if (selectVisible) {
+      selectVisible.addEventListener("click", () => {
+        const items = Array.from($("#playlistView").querySelectorAll("li.media-item"));
+        const paths = items.map((li) => li.dataset.path).filter(Boolean);
+        const allSelected =
+          paths.length > 0 && paths.every((p) => state.selectedPaths.includes(p));
+        state.selectedPaths = allSelected ? [] : paths;
+        state.selListEl = $("#playlistView");
+        updateSelectionStyles();
+      });
+    }
+    const removeSelected = $("#plRemoveSelected");
+    if (removeSelected) {
+      removeSelected.addEventListener("click", () => {
+        removeFromPlaylist(state.selectedPaths.slice());
+      });
+    }
     $("#plTree").addEventListener("change", () => {
       state.libFilters.tree = $("#plTree").checked;
       saveLibFilters();
@@ -2729,6 +2813,11 @@
       refreshPlaylistView();
     },
     refreshPlaylistView,
+    editTags,
+    async onTagsChanged() {
+      await refreshTagFilter();
+      await refreshPlaylistView();
+    },
   };
 
   document.addEventListener("DOMContentLoaded", init);

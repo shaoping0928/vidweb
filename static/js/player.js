@@ -39,6 +39,8 @@
     pendingSeekMs: null,
     streamEncoderLabel: "",
     streamWatchdog: null,
+    playbackChecked: false,
+    frameSeen: false,
     panelTab: "info",
     el: {},
 
@@ -142,6 +144,7 @@
       video.addEventListener("durationchange", () => this.updateProgress());
       video.addEventListener("timeupdate", () => {
         this.updateProgress();
+        this.checkUndecodable();
         this.updateSubtitle();
         if (Date.now() - this.lastSaveTs > 5000) {
           this.lastSaveTs = Date.now();
@@ -274,7 +277,9 @@
       this.lastDanmakuTime = -1;
       this.currentDetail = null;
       this.renderInfoPanel(null);
+      this.playbackChecked = false;
       this.el.video.src = API.streamUrl(path);
+      this.watchFirstFrame();
       this.el.video.play().catch(() => {});
       this.updateTitle();
       this.updatePlaylistSelection();
@@ -355,6 +360,7 @@
       const startMs = posMs > 1000 ? posMs : resumeMs;
       const record = this.currentDetail && this.currentDetail.record;
       this.streamMode = true;
+      this.playbackChecked = true;
       this.streamOffsetMs = Math.max(0, startMs);
       this.streamDurationMs = (record && record.duration_ms) || 0;
       this.pendingSeekMs = null;
@@ -430,6 +436,50 @@
     videoPositionMs() {
       const base = (this.el.video.currentTime || 0) * 1000;
       return this.streamMode ? this.streamOffsetMs + base : base;
+    },
+
+    watchFirstFrame() {
+      const video = this.el.video;
+      this.frameSeen = false;
+      if (typeof video.requestVideoFrameCallback !== "function") {
+        this.frameSeen = true;
+        return;
+      }
+      try {
+        video.requestVideoFrameCallback(() => {
+          this.frameSeen = true;
+        });
+      } catch (e) {
+        this.frameSeen = true;
+      }
+    },
+
+    async checkUndecodable() {
+      if (this.streamMode || this.playbackChecked) return;
+      const video = this.el.video;
+      if (video.paused || document.hidden) return;
+      if (video.currentTime < 5) return;
+      if (this.frameSeen) {
+        this.playbackChecked = true;
+        return;
+      }
+      if (typeof video.requestVideoFrameCallback !== "function") return;
+      this.playbackChecked = true;
+      const path = this.paths[this.index];
+      if (!path) return;
+      if (!this.transcodeOn) {
+        try {
+          const cfg = await API.get("/api/config");
+          this.transcodeOn = !!cfg.transcode;
+        } catch (e) {}
+        if (this.paths[this.index] !== path) return;
+      }
+      if (this.transcodeOn) {
+        this.showOsd("画面无法解码（可能是 HEVC/10bit），切换实时转码…");
+        this.startTranscodeStream(path);
+      } else {
+        this.showOsd("画面无法解码（可能是 HEVC/10bit），可在设置中开启服务端转码");
+      }
     },
 
     clearStreamWatchdog() {
@@ -791,16 +841,64 @@
       const tags = (detail.tags || [])
         .map(
           (t) =>
+            "<span class='tag-chip'>" +
             "<span class='dot' style='background:" +
             Fmt.escape(t.color || "#5c636e") +
             "'></span>" +
-            Fmt.escape(t.name)
+            Fmt.escape(t.name) +
+            "<button class='tag-chip-x' data-tag='" +
+            Fmt.escape(t.name) +
+            "' title='移除标签'>✕</button>" +
+            "</span>"
         )
         .join(" ");
-      row("标签", tags || "—");
+      row(
+        "标签",
+        (tags || "<span class='settings-hint'>—</span>") +
+          " <button id='infoEditTags' class='mini-btn'>编辑</button>"
+      );
       row("评论", (detail.comment_count || 0) + " 条");
       html += "</table>";
       box.innerHTML = html;
+      const editBtn = box.querySelector("#infoEditTags");
+      if (editBtn) editBtn.addEventListener("click", () => this.editTags());
+      box.querySelectorAll(".tag-chip-x").forEach((btn) => {
+        btn.addEventListener("click", () => this.removeTag(btn.dataset.tag));
+      });
+    },
+
+    async reloadDetail() {
+      const path = this.paths[this.index];
+      if (!path) return;
+      try {
+        const detail = await API.get("/api/files/detail", { path: path });
+        if (this.paths[this.index] !== path) return;
+        this.currentDetail = detail;
+        this.renderInfoPanel(detail);
+      } catch (e) {}
+    },
+
+    async removeTag(name) {
+      const detail = this.currentDetail;
+      const path = this.paths[this.index];
+      if (!detail || !path || !name) return;
+      const remaining = (detail.tags || [])
+        .filter((t) => t.name !== name)
+        .map((t) => t.name);
+      try {
+        await API.put("/api/files/tags", { path: path, tags: remaining });
+        this.showOsd("已移除标签：" + name);
+        await this.reloadDetail();
+        if (window.APP && window.APP.onTagsChanged) window.APP.onTagsChanged();
+      } catch (e) {
+        UI.alert(e.message);
+      }
+    },
+
+    editTags() {
+      const path = this.paths[this.index];
+      if (!path || !window.APP || !window.APP.editTags) return;
+      window.APP.editTags([path], () => this.reloadDetail());
     },
 
     renderCommentPanel(items) {

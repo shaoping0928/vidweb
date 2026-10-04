@@ -596,6 +596,67 @@ input[type="range"] {
   margin-left: 24px;
 }
 
+.list-toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 2px;
+}
+
+.list-toolbar .label {
+  margin-right: auto;
+  color: var(--dim);
+  font-size: 12px;
+}
+
+.list-toolbar button {
+  padding: 3px 10px;
+  font-size: 12px;
+}
+
+.list-toolbar button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.detail-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: rgba(127, 127, 127, 0.15);
+  margin: 0 4px 4px 0;
+  font-size: 12px;
+}
+
+.tag-chip-x {
+  border: none;
+  background: transparent;
+  color: var(--dim);
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.tag-chip-x:hover {
+  color: #e5534b;
+}
+
+.mini-btn {
+  padding: 1px 8px;
+  font-size: 12px;
+}
+
 .side {
   width: 260px;
   flex: 0 0 auto;
