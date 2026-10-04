@@ -25,6 +25,17 @@ def cached(path: str):
     return str(thumb) if thumb.exists() and thumb.stat().st_size > 0 else None
 
 
+def cached_keys() -> set:
+    try:
+        return {
+            entry.name
+            for entry in os.scandir(config.THUMB_DIR)
+            if entry.is_file()
+        }
+    except OSError:
+        return set()
+
+
 def request(path: str) -> None:
     if not path or cached(path):
         return

@@ -1,4 +1,6 @@
 import os
+import re
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -40,6 +42,8 @@ class PlaylistQuery(BaseModel):
     tag_match_all: bool = False
     sort: str = "name"
     paths_only: bool = False
+    tree: bool = False
+    folder: Optional[str] = None
 
 
 @router.post("/scan")
@@ -105,15 +109,32 @@ def _chunks(items, size):
         yield items[start : start + size]
 
 
+_stats_cache = {}
+_stats_lock = threading.Lock()
+_STATS_TTL = 10.0
+
+
+def _stat_path(raw: str):
+    now = time.time()
+    with _stats_lock:
+        hit = _stats_cache.get(raw)
+        if hit and now - hit[4] < _STATS_TTL:
+            return hit[:4]
+    try:
+        st = os.stat(raw)
+        value = (Path(raw).name, st.st_size, int(st.st_mtime), True)
+    except OSError:
+        value = (Path(raw).name, 0, 0, False)
+    with _stats_lock:
+        if len(_stats_cache) > 20000:
+            _stats_cache.clear()
+        _stats_cache[raw] = value + (now,)
+    return value
+
+
 def _load_playlist_entries(playlist_entries):
     paths = [entry["path"] for entry in playlist_entries]
-    stats = {}
-    for raw in paths:
-        try:
-            st = os.stat(raw)
-            stats[raw] = (Path(raw).name, st.st_size, int(st.st_mtime), True)
-        except OSError:
-            stats[raw] = (Path(raw).name, 0, 0, False)
+    stats = {raw: _stat_path(raw) for raw in paths}
     records = {}
     tag_names = {}
     tag_ids = {}
@@ -162,10 +183,137 @@ def _load_playlist_entries(playlist_entries):
     return entries
 
 
-@router.post("/playlist/query")
-def query_playlist(body: PlaylistQuery):
-    entries = _load_playlist_entries(db.playlist_entries())
-    total = len(entries)
+def _load_entries_db(playlist_entries, with_tags: bool = False):
+    paths = [entry["path"] for entry in playlist_entries]
+    records = {}
+    tag_names = {}
+    tag_ids = {}
+    with db.connection() as conn:
+        for chunk in _chunks(paths, 500):
+            placeholders = ",".join("?" for _ in chunk)
+            for row in conn.execute(
+                f"SELECT * FROM files WHERE path IN ({placeholders})", chunk
+            ):
+                records[row["path"]] = dict(row)
+        if with_tags:
+            ids = [record["id"] for record in records.values()]
+            for chunk in _chunks(ids, 500):
+                placeholders = ",".join("?" for _ in chunk)
+                for row in conn.execute(
+                    "SELECT ft.file_id, t.id AS tag_id, t.name FROM file_tags ft"
+                    " JOIN tags t ON t.id = ft.tag_id"
+                    f" WHERE ft.file_id IN ({placeholders}) ORDER BY t.name",
+                    chunk,
+                ):
+                    tag_names.setdefault(row["file_id"], []).append(row["name"])
+                    tag_ids.setdefault(row["file_id"], set()).add(row["tag_id"])
+    entries = []
+    for base_entry in playlist_entries:
+        raw = base_entry["path"]
+        record = records.get(raw)
+        file_id = record["id"] if record else None
+        entries.append(
+            {
+                "path": raw,
+                "name": Path(raw).name,
+                "size": record["size"] if record else 0,
+                "mtime": record["mtime"] if record else 0,
+                "exists": True,
+                "dir_id": base_entry["dir_id"],
+                "rel_path": base_entry["rel_path"],
+                "dir_path": base_entry["dir_path"],
+                "duration_ms": record["duration_ms"] if record else 0,
+                "last_position_ms": record["last_position_ms"] if record else 0,
+                "play_count": record["play_count"] if record else 0,
+                "last_played_at": record["last_played_at"] if record else 0,
+                "tags": tag_names.get(file_id, []),
+                "_tag_ids": tag_ids.get(file_id, set()),
+            }
+        )
+    return entries
+
+
+def _item_payload(entry: dict) -> dict:
+    return {
+        "path": entry["path"],
+        "name": entry["name"],
+        "size": entry["size"],
+        "mtime": entry["mtime"],
+        "exists": entry["exists"],
+        "dir_id": entry["dir_id"],
+        "rel_path": entry["rel_path"],
+        "dir_path": entry["dir_path"],
+        "duration_ms": entry["duration_ms"],
+        "last_position_ms": entry["last_position_ms"],
+        "play_count": entry["play_count"],
+        "last_played_at": entry["last_played_at"],
+        "tags": entry["tags"],
+        "has_thumb": thumbs.cached(entry["path"]) is not None,
+    }
+
+
+def _split_parts(value: str) -> list:
+    return [
+        part
+        for part in re.split(r"[\\/]+", value or "")
+        if part not in ("", ".", "..")
+    ]
+
+
+def _build_tree(entries: list) -> list:
+    nodes = {}
+
+    def ensure(path: str, name: str) -> dict:
+        node = nodes.get(path)
+        if node is None:
+            node = {"name": name, "path": path, "children": {}, "files": []}
+            nodes[path] = node
+        return node
+
+    for entry in entries:
+        dir_path = entry.get("dir_path")
+        rel_path = entry.get("rel_path") or ""
+        if entry.get("dir_id") and dir_path:
+            root = os.path.normpath(dir_path)
+            parts = _split_parts(rel_path) or [entry["name"]]
+            ensure(root, os.path.basename(root) or root)
+            current = root
+            for part in parts[:-1]:
+                current = os.path.normpath(os.path.join(current, part))
+                ensure(current, part)
+            nodes[current]["files"].append(entry)
+        else:
+            absolute = os.path.normpath(entry.get("path") or rel_path)
+            parent = os.path.dirname(absolute)
+            node = ensure(parent, os.path.basename(parent) or parent)
+            node["files"].append(entry)
+
+    roots = []
+    for path, node in nodes.items():
+        parent = os.path.dirname(path)
+        parent_node = nodes.get(parent)
+        if parent_node is not None and parent != path:
+            parent_node["children"][path] = node
+        else:
+            roots.append(node)
+
+    def finalize(node: dict) -> dict:
+        children = [
+            finalize(child)
+            for child in sorted(node["children"].values(), key=lambda item: item["name"].lower())
+        ]
+        count = len(node["files"]) + sum(child["count"] for child in children)
+        return {
+            "name": node["name"],
+            "path": node["path"],
+            "count": count,
+            "children": children,
+        }
+
+    return [finalize(node) for node in sorted(roots, key=lambda item: item["name"].lower())]
+
+
+def _filter_entries(entries: list, body: PlaylistQuery) -> list:
     keyword = (body.search or "").strip().lower()
     tag_sets = []
     if body.tag_ids:
@@ -212,22 +360,65 @@ def query_playlist(body: PlaylistQuery):
             if not ok:
                 continue
         filtered.append(entry)
+    return filtered
 
-    sort = body.sort or "name"
+
+def _sort_entries(entries: list, sort: str):
+    sort = sort or "name"
     if sort == "name_desc":
-        filtered.sort(key=lambda e: e["name"].lower(), reverse=True)
+        entries.sort(key=lambda e: e["name"].lower(), reverse=True)
     elif sort == "recent":
-        filtered.sort(key=lambda e: e["last_played_at"], reverse=True)
+        entries.sort(key=lambda e: e["last_played_at"], reverse=True)
     elif sort == "plays":
-        filtered.sort(key=lambda e: e["play_count"], reverse=True)
+        entries.sort(key=lambda e: e["play_count"], reverse=True)
     elif sort == "duration":
-        filtered.sort(key=lambda e: e["duration_ms"], reverse=True)
+        entries.sort(key=lambda e: e["duration_ms"], reverse=True)
     elif sort == "size":
-        filtered.sort(key=lambda e: e["size"], reverse=True)
+        entries.sort(key=lambda e: e["size"], reverse=True)
     elif sort == "mtime":
-        filtered.sort(key=lambda e: e["mtime"], reverse=True)
+        entries.sort(key=lambda e: e["mtime"], reverse=True)
     else:
-        filtered.sort(key=lambda e: e["name"].lower())
+        entries.sort(key=lambda e: e["name"].lower())
+
+
+@router.post("/playlist/query")
+def query_playlist(body: PlaylistQuery):
+    if body.folder is not None:
+        folder = os.path.normpath(body.folder)
+        subset = [
+            entry
+            for entry in db.playlist_entries()
+            if os.path.normpath(os.path.dirname(os.path.normpath(entry["path"]))) == folder
+        ]
+        entries = _load_playlist_entries(subset)
+        filtered = _filter_entries(entries, body)
+        _sort_entries(filtered, body.sort)
+        items = [_item_payload(entry) for entry in filtered]
+        return {
+            "items": items,
+            "total": len(entries),
+            "filtered": len(filtered),
+            "folder": folder,
+        }
+
+    if body.tree:
+        base = db.playlist_entries()
+        if body.status == "missing":
+            entries = _load_playlist_entries(base)
+        else:
+            entries = _load_entries_db(base, with_tags=bool(body.tag_ids))
+        filtered = _filter_entries(entries, body)
+        _sort_entries(filtered, body.sort)
+        return {
+            "tree": _build_tree(filtered),
+            "total": len(entries),
+            "filtered": len(filtered),
+        }
+
+    entries = _load_playlist_entries(db.playlist_entries())
+    total = len(entries)
+    filtered = _filter_entries(entries, body)
+    _sort_entries(filtered, body.sort)
 
     count = len(filtered)
     if body.paths_only:
@@ -235,25 +426,7 @@ def query_playlist(body: PlaylistQuery):
 
     offset = max(0, int(body.offset))
     limit = min(500, max(1, int(body.limit)))
-    items = []
-    for entry in filtered[offset : offset + limit]:
-        item = {
-            "path": entry["path"],
-            "name": entry["name"],
-            "size": entry["size"],
-            "mtime": entry["mtime"],
-            "exists": entry["exists"],
-            "dir_id": entry["dir_id"],
-            "rel_path": entry["rel_path"],
-            "dir_path": entry["dir_path"],
-            "duration_ms": entry["duration_ms"],
-            "last_position_ms": entry["last_position_ms"],
-            "play_count": entry["play_count"],
-            "last_played_at": entry["last_played_at"],
-            "tags": entry["tags"],
-            "has_thumb": thumbs.cached(entry["path"]) is not None,
-        }
-        items.append(item)
+    items = [_item_payload(entry) for entry in filtered[offset : offset + limit]]
     return {"items": items, "total": total, "filtered": count, "offset": offset, "limit": limit}
 
 

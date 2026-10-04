@@ -482,6 +482,77 @@ input[type="range"] {
   background: transparent;
 }
 
+.tree-summary {
+  color: var(--dim);
+  font-size: 12px;
+  padding: 6px 10px;
+  cursor: default;
+}
+
+.tree-summary:hover {
+  background: transparent;
+}
+
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.tree-row:hover {
+  background: var(--hover, rgba(127, 127, 127, 0.12));
+}
+
+.tree-arrow {
+  flex: 0 0 14px;
+  color: var(--dim);
+  text-align: center;
+}
+
+.tree-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree-count {
+  flex: 0 0 auto;
+  color: var(--dim);
+  font-size: 12px;
+  background: rgba(127, 127, 127, 0.15);
+  border-radius: 10px;
+  padding: 1px 8px;
+}
+
+.tree-children {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.tree-children.hidden {
+  display: none;
+}
+
+.tree-loading {
+  color: var(--dim);
+  font-size: 12px;
+  padding: 4px 10px 4px 40px;
+  cursor: default;
+}
+
+.tree-loading:hover {
+  background: transparent;
+}
+
+.tree-file {
+  margin-left: 24px;
+}
+
 .side {
   width: 260px;
   flex: 0 0 auto;

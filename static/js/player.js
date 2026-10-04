@@ -38,6 +38,7 @@
     streamDurationMs: 0,
     pendingSeekMs: null,
     streamEncoderLabel: "",
+    streamWatchdog: null,
     panelTab: "info",
     el: {},
 
@@ -151,6 +152,7 @@
         el.btnPlay.textContent = "⏸";
         el.danmakuLayer.classList.remove("dm-paused");
       });
+      video.addEventListener("playing", () => this.clearStreamWatchdog());
       video.addEventListener("pause", () => {
         el.btnPlay.textContent = "▶";
         el.danmakuLayer.classList.add("dm-paused");
@@ -162,6 +164,7 @@
         const path = this.paths[this.index];
         if (!path) return;
         if (this.streamMode) {
+          this.stopStream();
           this.showOsd("实时转码播放失败，请检查设置中的转码硬件");
           return;
         }
@@ -361,6 +364,14 @@
       video.play().catch(() => {});
       this.updateProgress();
       this.showOsd("已切换实时转码播放（不占用磁盘）");
+      this.clearStreamWatchdog();
+      this.streamWatchdog = setTimeout(() => {
+        if (!this.streamMode || this.paths[this.index] !== path) return;
+        const current = this.el.video;
+        if (current.readyState >= 2 || current.currentTime > 0.5) return;
+        this.stopStream();
+        this.showOsd("实时转码启动超时，请检查转码硬件设置");
+      }, 15000);
       if (!this.streamDurationMs) {
         try {
           const detail = await API.get("/api/files/detail", { path: path });
@@ -416,7 +427,15 @@
       return this.streamMode ? this.streamOffsetMs + base : base;
     },
 
+    clearStreamWatchdog() {
+      if (this.streamWatchdog) {
+        clearTimeout(this.streamWatchdog);
+        this.streamWatchdog = null;
+      }
+    },
+
     stopStream() {
+      this.clearStreamWatchdog();
       if (!this.streamMode) return;
       this.streamMode = false;
       this.streamOffsetMs = 0;

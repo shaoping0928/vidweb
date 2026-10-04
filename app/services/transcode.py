@@ -115,11 +115,13 @@ def stream(path: str, start_ms: int = 0):
         *_encoder_args(encoder),
         "-pix_fmt", "yuv420p",
     ]
-    if audio in ("aac", "mp3"):
+    if audio == "aac":
         cmd += ["-c:a", "copy"]
     else:
         cmd += ["-c:a", "aac", "-b:a", "160k"]
     cmd += [
+        "-g", "48",
+        "-max_interleave_delta", "0",
         "-movflags", "frag_keyframe+empty_moov+default_base_moof",
         "-f", "mp4", "pipe:1",
     ]
@@ -134,7 +136,7 @@ def stream(path: str, start_ms: int = 0):
     def generate():
         try:
             while True:
-                chunk = proc.stdout.read(65536)
+                chunk = proc.stdout.read(16384)
                 if not chunk:
                     break
                 yield chunk

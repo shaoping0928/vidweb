@@ -18,6 +18,10 @@
     playlistFiltered: 0,
     playlistOffset: 0,
     playlistLoading: false,
+    playlistTree: [],
+    treeFiles: new Map(),
+    treeToken: 0,
+    treeExpanded: new Set(),
     libFilters: loadLibFilters(),
     tags: [],
     tagSubtrees: new Map(),
@@ -251,6 +255,7 @@
       sort: "name",
       tagMode: "any",
       tagNames: [],
+      tree: false,
     };
     const saved = Prefs.getJSON("mw/libFilters", {});
     return Object.assign(defaults, saved || {});
@@ -263,6 +268,7 @@
   function restoreLibFilterUI() {
     $("#plSearch").value = state.libFilters.search || "";
     $("#plSort").value = state.libFilters.sort || "name";
+    $("#plTree").checked = !!state.libFilters.tree;
     const status = document.querySelector(
       'input[name="plStatus"][value="' + (state.libFilters.status || "all") + '"]'
     );
@@ -1012,6 +1018,7 @@
       sort: "name",
       tagMode: "any",
       tagNames: [],
+      tree: !!state.libFilters.tree,
     };
     saveLibFilters();
     restoreLibFilterUI();
@@ -1064,6 +1071,32 @@
     if (resetPage) state.pages.playlist = 1;
     const size = pageSize();
     state.playlistLoading = true;
+    if (state.libFilters.tree) {
+      state.treeToken += 1;
+      try {
+        const data = await API.post(
+          "/api/playlist/query",
+          playlistQueryBody({ tree: true })
+        );
+        state.playlistTree = data.tree || [];
+        state.treeFiles = new Map();
+        state.visiblePaths = [];
+        state.playlistTotal = data.total || 0;
+        state.playlistFiltered = data.filtered || 0;
+        state.playlistInfo = {};
+      } catch (e) {
+        state.playlistTree = [];
+        state.treeFiles = new Map();
+        state.visiblePaths = [];
+        state.playlistTotal = 0;
+        state.playlistFiltered = 0;
+        UI.toast("视频库加载失败: " + e.message);
+      } finally {
+        state.playlistLoading = false;
+      }
+      renderPlaylist();
+      return;
+    }
     try {
       const data = await API.post(
         "/api/playlist/query",
@@ -1093,6 +1126,114 @@
 
   const collator = new Intl.Collator("zh-Hans-CN", { sensitivity: "base", numeric: true });
 
+  function treeFolderPaths(li) {
+    const folder = li.dataset.folder;
+    const items = (folder && state.treeFiles.get(folder)) || [];
+    return items.map((item) => item.path);
+  }
+
+  function treeFileItem(file, folder) {
+    const tags = file.tags || [];
+    let subtitle = tags.length ? "标签: " + tags.join(", ") : file.path;
+    if (file.last_position_ms > 0) {
+      subtitle += " · 上次进度 " + Fmt.time(file.last_position_ms);
+    }
+    const li = makeMediaItem({
+      path: file.path,
+      name: file.name || basename(file.path),
+      subtitle,
+      missing: file.exists === false,
+      hasThumb: file.has_thumb,
+    });
+    if (file.rel_path) {
+      li.title =
+        file.path +
+        "\n相对路径: " +
+        file.rel_path +
+        (file.dir_path ? "\n目录: " + file.dir_path : "");
+    }
+    li.dataset.folder = folder;
+    li.classList.add("tree-file");
+    return li;
+  }
+
+  async function loadTreeFolder(node, holder) {
+    const key = node.path;
+    const token = state.treeToken;
+    if (!state.treeFiles.has(key)) {
+      try {
+        const data = await API.post(
+          "/api/playlist/query",
+          playlistQueryBody({ folder: key })
+        );
+        if (token !== state.treeToken) return;
+        state.treeFiles.set(key, data.items || []);
+      } catch (e) {
+        if (token !== state.treeToken) return;
+        state.treeFiles.set(key, []);
+      }
+    }
+    if (token !== state.treeToken || !holder.isConnected) return;
+    const items = state.treeFiles.get(key) || [];
+    if (!items.length) {
+      holder.textContent = "（无匹配视频）";
+      return;
+    }
+    const frag = document.createDocumentFragment();
+    for (const file of items) frag.appendChild(treeFileItem(file, key));
+    holder.replaceWith(frag);
+  }
+
+  function buildTreeNode(node, depth) {
+    const li = document.createElement("li");
+    li.className = "tree-node";
+    const row = document.createElement("div");
+    row.className = "tree-row";
+    row.style.paddingLeft = 8 + depth * 16 + "px";
+    const expanded = state.treeExpanded.has(node.path);
+    const arrow = document.createElement("span");
+    arrow.className = "tree-arrow";
+    arrow.textContent = expanded ? "▾" : "▸";
+    const name = document.createElement("span");
+    name.className = "tree-name";
+    name.textContent = node.name;
+    name.title = node.path;
+    const count = document.createElement("span");
+    count.className = "tree-count";
+    count.textContent = node.count;
+    row.append(arrow, name, count);
+    li.appendChild(row);
+    const box = document.createElement("ul");
+    box.className = "tree-children" + (expanded ? "" : " hidden");
+    li.appendChild(box);
+    let rendered = false;
+    const renderChildren = () => {
+      if (rendered) return;
+      rendered = true;
+      const frag = document.createDocumentFragment();
+      for (const child of node.children || []) {
+        frag.appendChild(buildTreeNode(child, depth + 1));
+      }
+      const holder = document.createElement("li");
+      holder.className = "tree-loading";
+      holder.textContent = "加载中...";
+      frag.appendChild(holder);
+      box.appendChild(frag);
+      loadTreeFolder(node, holder);
+    };
+    row.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const now = !state.treeExpanded.has(node.path);
+      if (now) state.treeExpanded.add(node.path);
+      else state.treeExpanded.delete(node.path);
+      arrow.textContent = now ? "▾" : "▸";
+      box.classList.toggle("hidden", !now);
+      if (now) renderChildren();
+    });
+    if (expanded) renderChildren();
+    return li;
+  }
+
   function renderPlaylist() {
     const list = $("#playlistView");
     list.innerHTML = "";
@@ -1109,6 +1250,17 @@
           filtered ? resetLibFilters : restorePlaylistFromDb
         )
       );
+      renderPager("#playlistPager", "playlist", 0, refreshPlaylistView, true);
+      return;
+    }
+    if (state.libFilters.tree) {
+      const summary = document.createElement("li");
+      summary.className = "tree-summary";
+      summary.textContent = "共 " + state.playlistFiltered + " 个视频";
+      list.appendChild(summary);
+      const frag = document.createDocumentFragment();
+      for (const node of state.playlistTree) frag.appendChild(buildTreeNode(node, 0));
+      list.appendChild(frag);
       renderPager("#playlistPager", "playlist", 0, refreshPlaylistView, true);
       return;
     }
@@ -2131,15 +2283,23 @@
     $("#playlistView").addEventListener("click", (e) => {
       const li = e.target.closest("li.media-item");
       if (!li) return;
-      handleItemClick(e, $("#playlistView"), state.visiblePaths, li);
+      const paths = state.libFilters.tree ? treeFolderPaths(li) : state.visiblePaths;
+      handleItemClick(e, $("#playlistView"), paths, li);
       if (!e.ctrlKey && !e.shiftKey) showDetailsFor(li.dataset.path);
     });
     $("#playlistView").addEventListener("dblclick", async (e) => {
       const li = e.target.closest("li.media-item");
       if (!li) return;
-      const index = parseInt(li.dataset.index, 10);
-      const paths = await fetchFilteredPaths();
-      if (paths.length) Player.open(paths, index);
+      let paths;
+      let index;
+      if (state.libFilters.tree) {
+        paths = treeFolderPaths(li);
+        index = paths.indexOf(li.dataset.path);
+      } else {
+        paths = await fetchFilteredPaths();
+        index = parseInt(li.dataset.index, 10);
+      }
+      if (paths.length && index >= 0) Player.open(paths, index);
     });
     $("#playlistView").addEventListener("contextmenu", (e) => {
       e.preventDefault();
@@ -2152,8 +2312,16 @@
         {
           label: "播放",
           onClick: async () => {
-            const paths = await fetchFilteredPaths();
-            if (paths.length) Player.open(paths, index);
+            let paths;
+            let playIndex;
+            if (state.libFilters.tree) {
+              paths = treeFolderPaths(li);
+              playIndex = paths.indexOf(li.dataset.path);
+            } else {
+              paths = await fetchFilteredPaths();
+              playIndex = index;
+            }
+            if (paths.length && playIndex >= 0) Player.open(paths, playIndex);
           },
         },
         { label: "编辑标签...", enabled: selected.length > 0, onClick: () => editTags(selected) },
@@ -2276,6 +2444,11 @@
       saveLibFilters();
       refreshPlaylistView(true);
     });
+    $("#plTree").addEventListener("change", () => {
+      state.libFilters.tree = $("#plTree").checked;
+      saveLibFilters();
+      refreshPlaylistView(true);
+    });
     $("#plResetFilters").addEventListener("click", resetLibFilters);
     $("#plRestore").addEventListener("click", restorePlaylistFromDb);
     $("#tagCreate").addEventListener("click", createTag);
@@ -2343,7 +2516,11 @@
 
   /* ------------------------------------------------------------ init */
 
+  let appInitialized = false;
+
   async function init() {
+    if (appInitialized) return;
+    appInitialized = true;
     await Prefs.load();
     applyPrefs();
     await refreshConfig();
