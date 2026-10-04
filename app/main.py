@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from . import config, db
-from .routers import browse, comments, files, library, recent, search, tags, thumbs
+from .routers import browse, comments, files, library, recent, search, settings, tags, thumbs
 
 MINIMAL_HTML = """
 <!DOCTYPE html>
@@ -36,6 +36,7 @@ app.include_router(comments.router)
 app.include_router(search.router)
 app.include_router(recent.router)
 app.include_router(thumbs.router)
+app.include_router(settings.router)
 
 
 @app.get("/api/config")

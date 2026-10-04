@@ -19,25 +19,50 @@
     osdTimer: null,
     hideTimer: null,
     initialized: false,
+    danmakuOn: true,
+    danmakuCross: 8000,
+    danmakuRaf: null,
+    lastDanmakuTime: -1,
+    laneFree: [],
     el: {},
 
     init() {
       if (this.initialized) return;
       this.initialized = true;
       const ids = [
-        "playerOverlay", "video", "subtitleOverlay", "playerOsd", "playerTop", "playerTitle",
-        "playerStage", "playerPlaylist", "playerPlaylistView", "playerPlaylistClose", "playerBack",
+        "playerOverlay", "video", "subtitleOverlay", "playerOsd", "playerHeader", "playerTitle",
+        "playerStage", "playerMain", "playerBody", "playerPanel", "playerPlaylistView", "playerBack",
         "progressTrack", "progressFill", "progressHandle", "progressMarkers", "progressTip",
         "timeNow", "timeTotal", "btnPrev", "btnPlay", "btnNext", "btnMode", "btnList", "btnAspect",
         "btnSnap", "btnMute", "volume", "volText", "speed", "speedText", "btnFullscreen",
-        "btnLoadSub", "btnToggleSub", "btnAddComment", "btnComments", "subtitleFileInput",
+        "btnLoadSub", "btnToggleSub", "btnAddComment", "btnAddCommentPanel", "btnPanelToggle",
+        "subtitleFileInput", "danmakuLayer", "btnDanmaku", "playerCommentList",
       ];
       ids.forEach((id) => {
         this.el[id] = document.getElementById(id);
       });
-      this.mode = parseInt(localStorage.getItem("mw/mode") || "0", 10) || 0;
-      this.el.volume.value = localStorage.getItem("mw/volume") || "80";
-      this.el.speed.value = localStorage.getItem("mw/speed") || "10";
+      let defaults = {};
+      try {
+        defaults = JSON.parse(localStorage.getItem("mw/defaults") || "{}");
+      } catch (e) {
+        defaults = {};
+      }
+      const modeRaw = localStorage.getItem("mw/mode");
+      this.mode = modeRaw !== null ? parseInt(modeRaw, 10) || 0 : parseInt(defaults.mode, 10) || 0;
+      const volumeRaw = localStorage.getItem("mw/volume");
+      this.el.volume.value =
+        volumeRaw !== null ? volumeRaw : String(defaults.volume !== undefined ? defaults.volume : 80);
+      const speedRaw = localStorage.getItem("mw/speed");
+      this.el.speed.value =
+        speedRaw !== null ? speedRaw : String(defaults.speed !== undefined ? defaults.speed : 10);
+      const danmakuRaw = localStorage.getItem("mw/danmaku");
+      this.danmakuOn = danmakuRaw !== null ? danmakuRaw === "1" : defaults.danmaku !== false;
+      const danmakuSpeedRaw = localStorage.getItem("mw/danmakuSpeed");
+      this.danmakuCross =
+        parseInt(danmakuSpeedRaw || String(defaults.danmakuSpeed || 8000), 10) || 8000;
+      this.el.btnDanmaku.textContent = this.danmakuOn ? "弹幕: 开" : "弹幕: 关";
+      this.el.danmakuLayer.classList.add("dm-paused");
+      this.startDanmakuLoop();
       this.applyVolume();
       this.applySpeed();
       this.updateModeButton();
@@ -50,8 +75,9 @@
       el.btnPrev.addEventListener("click", () => this.playIndex(this.index - 1));
       el.btnNext.addEventListener("click", () => this.playIndex(this.index + 1));
       el.btnMode.addEventListener("click", () => this.cycleMode());
-      el.btnList.addEventListener("click", () => this.togglePlaylistPanel());
-      el.playerPlaylistClose.addEventListener("click", () => el.playerPlaylist.classList.add("hidden"));
+      el.btnList.addEventListener("click", () => this.togglePanel());
+      el.btnPanelToggle.addEventListener("click", () => this.togglePanel());
+      el.btnDanmaku.addEventListener("click", () => this.setDanmaku(!this.danmakuOn));
       el.playerBack.addEventListener("click", () => this.close());
       el.btnMute.addEventListener("click", () => this.toggleMute());
       el.btnAspect.addEventListener("click", () => this.cycleAspect());
@@ -60,7 +86,10 @@
       el.btnToggleSub.addEventListener("click", () => this.toggleSub());
       el.btnLoadSub.addEventListener("click", () => el.subtitleFileInput.click());
       el.btnAddComment.addEventListener("click", () => this.addComment());
-      el.btnComments.addEventListener("click", () => this.showComments());
+      el.btnAddCommentPanel.addEventListener("click", () => this.addComment());
+      Array.from(document.querySelectorAll(".ptab-btn")).forEach((btn) => {
+        btn.addEventListener("click", () => this.switchPanelTab(btn.dataset.ptab));
+      });
       el.volume.addEventListener("input", () => {
         this.applyVolume();
         localStorage.setItem("mw/volume", el.volume.value);
@@ -74,7 +103,10 @@
         if (file) this.uploadSubtitle(file);
         el.subtitleFileInput.value = "";
       });
-      el.playerStage.addEventListener("dblclick", () => this.toggleFullscreen());
+      el.playerStage.addEventListener("dblclick", (e) => {
+        if (e.target.closest("#controls")) return;
+        this.toggleFullscreen();
+      });
       el.playerPlaylistView.addEventListener("dblclick", (e) => {
         const li = e.target.closest("li");
         if (li && li.dataset.index !== undefined) this.playIndex(parseInt(li.dataset.index, 10));
@@ -93,11 +125,14 @@
       });
       video.addEventListener("play", () => {
         el.btnPlay.textContent = "⏸";
+        el.danmakuLayer.classList.remove("dm-paused");
       });
       video.addEventListener("pause", () => {
         el.btnPlay.textContent = "▶";
+        el.danmakuLayer.classList.add("dm-paused");
         this.saveProgress();
       });
+      video.addEventListener("seeked", () => this.resetDanmaku());
       video.addEventListener("ended", () => this.onEnded());
       video.addEventListener("error", () => {
         if (this.paths[this.index]) this.showOsd("播放失败：浏览器可能不支持该视频编码");
@@ -114,20 +149,20 @@
         if (!this.dragging) el.progressTip.classList.add("hidden");
       });
 
-      el.playerOverlay.addEventListener("pointermove", () => {
+      el.playerMain.addEventListener("pointermove", () => {
         if (!document.fullscreenElement) return;
-        el.playerOverlay.classList.remove("hide-controls");
+        el.playerMain.classList.remove("hide-controls");
         clearTimeout(this.hideTimer);
         this.hideTimer = setTimeout(() => {
-          if (document.fullscreenElement) el.playerOverlay.classList.add("hide-controls");
+          if (document.fullscreenElement) el.playerMain.classList.add("hide-controls");
         }, 2000);
       });
       document.addEventListener("fullscreenchange", () => {
         clearTimeout(this.hideTimer);
         if (document.fullscreenElement) {
-          this.hideTimer = setTimeout(() => el.playerOverlay.classList.add("hide-controls"), 2000);
+          this.hideTimer = setTimeout(() => el.playerMain.classList.add("hide-controls"), 2000);
         } else {
-          el.playerOverlay.classList.remove("hide-controls");
+          el.playerMain.classList.remove("hide-controls");
         }
       });
       document.addEventListener("keydown", (e) => this.onKey(e));
@@ -164,6 +199,10 @@
       this.el.subtitleOverlay.textContent = "";
       this.markers = [];
       this.renderMarkers();
+      this.clearDanmaku();
+      this.lastDanmakuTime = -1;
+      this.currentDetail = null;
+      this.renderInfoPanel(null);
       this.el.video.src = API.streamUrl(path);
       this.el.video.play().catch(() => {});
       this.updateTitle();
@@ -174,6 +213,8 @@
       try {
         const detail = await API.get("/api/files/detail", { path });
         if (token !== this.loadToken) return;
+        this.currentDetail = detail;
+        this.renderInfoPanel(detail);
         if (detail.record && detail.record.last_position_ms > 0) {
           this.pendingResume = detail.record.last_position_ms;
           this.maybeResume();
@@ -239,7 +280,6 @@
       this.saveProgress();
       this.el.video.pause();
       this.el.playerOverlay.classList.add("hidden");
-      this.el.playerPlaylist.classList.add("hidden");
       if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
       if (window.APP && window.APP.onPlayerClosed) window.APP.onPlayerClosed();
     },
@@ -303,8 +343,134 @@
       if (current) current.scrollIntoView({ block: "center" });
     },
 
-    togglePlaylistPanel() {
-      this.el.playerPlaylist.classList.toggle("hidden");
+    togglePanel() {
+      this.el.playerPanel.classList.toggle("hidden");
+    },
+
+    switchPanelTab(name) {
+      Array.from(document.querySelectorAll(".ptab-btn")).forEach((btn) => {
+        btn.classList.toggle("active", btn.dataset.ptab === name);
+      });
+      Array.from(document.querySelectorAll(".ptab")).forEach((tab) => {
+        tab.classList.toggle("active", tab.id === "ptab-" + name);
+      });
+      if (name === "info" && this.currentDetail) this.renderInfoPanel(this.currentDetail);
+      if (name === "comments") this.refreshCommentsForCurrent();
+    },
+
+    renderInfoPanel(detail) {
+      const box = document.getElementById("ptab-info");
+      if (!box) return;
+      if (!detail) {
+        box.innerHTML = "<p class='settings-hint'>正在读取视频信息...</p>";
+        return;
+      }
+      const rec = detail.record || {};
+      let html = "";
+      if (detail.thumbnail) {
+        html += "<div class='info-thumb'><img src='" + API.thumbUrl(detail.path) + "' alt=''></div>";
+      }
+      html += "<h3>" + Fmt.escape(detail.name) + "</h3><table class='info-table'>";
+      const row = (key, value) => {
+        html += "<tr><td>" + key + "</td><td>" + value + "</td></tr>";
+      };
+      row("路径", Fmt.escape(detail.path));
+      row("大小", Fmt.bytes(detail.size));
+      row("修改时间", Fmt.dateTime(detail.mtime));
+      if (rec.duration_ms > 0) row("时长", Fmt.time(rec.duration_ms));
+      if (rec.width > 0 && rec.height > 0) row("分辨率", rec.width + " × " + rec.height);
+      if (rec.title) row("标题", Fmt.escape(rec.title));
+      row("播放次数", rec.play_count !== undefined ? rec.play_count : 0);
+      row("上次播放", Fmt.relative(rec.last_played_at));
+      if (rec.last_position_ms > 0) row("上次进度", Fmt.time(rec.last_position_ms));
+      const tags = (detail.tags || [])
+        .map(
+          (t) =>
+            "<span class='dot' style='background:" +
+            Fmt.escape(t.color || "#5c636e") +
+            "'></span>" +
+            Fmt.escape(t.name)
+        )
+        .join(" ");
+      row("标签", tags || "—");
+      row("评论", (detail.comment_count || 0) + " 条");
+      html += "</table>";
+      box.innerHTML = html;
+    },
+
+    renderCommentPanel(items) {
+      const list = document.getElementById("playerCommentList");
+      if (!list) return;
+      list.innerHTML = "";
+      if (!items || !items.length) {
+        const empty = document.createElement("div");
+        empty.className = "settings-hint";
+        empty.textContent = "暂无评论";
+        list.appendChild(empty);
+        return;
+      }
+      for (const comment of items) {
+        const row = document.createElement("div");
+        row.className = "comment-row";
+        const time = document.createElement("span");
+        time.className = "comment-time";
+        time.textContent = Fmt.time(comment.position_ms);
+        const text = document.createElement("span");
+        text.className = "comment-text";
+        text.textContent = comment.text;
+        const actions = document.createElement("span");
+        actions.className = "comment-actions";
+        const edit = document.createElement("button");
+        edit.textContent = "编辑";
+        edit.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          const value = await UI.prompt("编辑评论", comment.text, { multiline: true });
+          if (!value || !value.trim()) return;
+          try {
+            await API.put("/api/comments/" + comment.id, { text: value.trim() });
+            this.refreshCommentsForCurrent();
+          } catch (error) {
+            UI.alert(error.message);
+          }
+        });
+        const remove = document.createElement("button");
+        remove.textContent = "删除";
+        remove.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          if (!(await UI.confirm("确定删除该评论吗？"))) return;
+          try {
+            await API.del("/api/comments/" + comment.id);
+            this.refreshCommentsForCurrent();
+          } catch (error) {
+            UI.alert(error.message);
+          }
+        });
+        actions.append(edit, remove);
+        row.append(time, text, actions);
+        row.addEventListener("click", () => {
+          this.el.video.currentTime = comment.position_ms / 1000;
+        });
+        list.appendChild(row);
+      }
+    },
+
+    applyComments(items) {
+      this.markers = (items || []).map((c) => ({
+        position: c.position_ms,
+        text: c.text,
+      }));
+      this.renderMarkers();
+      this.renderCommentPanel(items);
+      if (this.danmakuOn) this.resetDanmaku();
+    },
+
+    async refreshCommentsForCurrent() {
+      const path = this.paths[this.index];
+      if (!path) return;
+      try {
+        const data = await API.get("/api/comments", { path: path });
+        this.applyComments(data.items || []);
+      } catch (e) {}
     },
 
     cycleMode() {
@@ -356,7 +522,7 @@
       if (document.fullscreenElement) {
         document.exitFullscreen().catch(() => {});
       } else {
-        this.el.playerOverlay.requestFullscreen().catch(() => this.showOsd("全屏失败"));
+        this.el.playerMain.requestFullscreen().catch(() => this.showOsd("全屏失败"));
       }
     },
 
@@ -366,6 +532,107 @@
       this.el.playerOsd.classList.remove("hidden");
       clearTimeout(this.osdTimer);
       this.osdTimer = setTimeout(() => this.el.playerOsd.classList.add("hidden"), 1500);
+    },
+
+    /* -------------------------------------------------------- danmaku */
+
+    danmakuCrossMs() {
+      return this.danmakuCross || 8000;
+    },
+
+    setDanmaku(on) {
+      this.danmakuOn = !!on;
+      localStorage.setItem("mw/danmaku", this.danmakuOn ? "1" : "0");
+      this.el.btnDanmaku.textContent = this.danmakuOn ? "弹幕: 开" : "弹幕: 关";
+      if (this.danmakuOn) this.resetDanmaku();
+      else this.clearDanmaku();
+      this.showOsd(this.danmakuOn ? "弹幕: 开" : "弹幕: 关");
+    },
+
+    toggleDanmaku() {
+      this.setDanmaku(!this.danmakuOn);
+    },
+
+    clearDanmaku() {
+      this.el.danmakuLayer.innerHTML = "";
+      this.laneFree = [];
+    },
+
+    resetDanmaku(nowMs) {
+      const now = nowMs !== undefined ? nowMs : this.el.video.currentTime * 1000;
+      this.clearDanmaku();
+      this.lastDanmakuTime = now;
+      if (!this.danmakuOn) return;
+      const cross = this.danmakuCrossMs();
+      for (const marker of this.markers) {
+        const elapsed = now - marker.position;
+        if (elapsed >= 0 && elapsed < cross * 0.9) this.spawnDanmaku(marker, elapsed);
+      }
+    },
+
+    startDanmakuLoop() {
+      if (this.danmakuRaf) return;
+      const tick = () => {
+        this.danmakuRaf = requestAnimationFrame(tick);
+        this.danmakuStep();
+      };
+      this.danmakuRaf = requestAnimationFrame(tick);
+    },
+
+    danmakuStep() {
+      if (!this.danmakuOn) return;
+      if (this.el.playerOverlay.classList.contains("hidden")) return;
+      const t = this.el.video.currentTime * 1000;
+      const last = this.lastDanmakuTime;
+      if (last < 0) {
+        this.lastDanmakuTime = t;
+        return;
+      }
+      if (t < last - 500 || t > last + 1500) {
+        this.resetDanmaku(t);
+        return;
+      }
+      if (t <= last) return;
+      for (const marker of this.markers) {
+        if (marker.position > last && marker.position <= t) this.spawnDanmaku(marker, 0);
+      }
+      this.lastDanmakuTime = t;
+    },
+
+    pickLane(nowVideoMs) {
+      const lanes = Math.max(1, Math.floor(this.el.danmakuLayer.clientHeight / 30));
+      if (!this.laneFree || this.laneFree.length !== lanes) {
+        this.laneFree = new Array(lanes).fill(-Infinity);
+      }
+      for (let i = 0; i < lanes; i++) {
+        if (this.laneFree[i] <= nowVideoMs) return i;
+      }
+      let best = 0;
+      for (let i = 1; i < lanes; i++) {
+        if (this.laneFree[i] < this.laneFree[best]) best = i;
+      }
+      return best;
+    },
+
+    spawnDanmaku(marker, elapsedMs) {
+      if (!this.danmakuOn) return;
+      const layer = this.el.danmakuLayer;
+      const width = layer.clientWidth;
+      if (!width) return;
+      const nowVideo = this.el.video.currentTime * 1000;
+      const cross = this.danmakuCrossMs();
+      const lane = this.pickLane(nowVideo);
+      this.laneFree[lane] = nowVideo + cross * 0.6;
+      const item = document.createElement("div");
+      item.className = "danmaku-item";
+      item.textContent = String(marker.text).replace(/\n/g, " ");
+      const rate = this.el.video.playbackRate || 1;
+      item.style.top = lane * 30 + "px";
+      item.style.animationDuration = cross / rate + "ms";
+      item.style.setProperty("--dm-width", width + "px");
+      if (elapsedMs > 0) item.style.animationDelay = -(elapsedMs / rate) + "ms";
+      item.addEventListener("animationend", () => item.remove());
+      layer.appendChild(item);
     },
 
     updateProgress() {
@@ -520,7 +787,11 @@
           break;
         case "l":
         case "L":
-          this.togglePlaylistPanel();
+          this.togglePanel();
+          break;
+        case "d":
+        case "D":
+          this.toggleDanmaku();
           break;
         case "s":
         case "S":
@@ -655,14 +926,9 @@
       try {
         const data = await API.get("/api/comments", { path: path });
         if (token !== this.loadToken) return;
-        this.markers = (data.items || []).map((c) => ({
-          position: c.position_ms,
-          text: c.text,
-        }));
-        this.renderMarkers();
+        this.applyComments(data.items || []);
       } catch (e) {
-        this.markers = [];
-        this.renderMarkers();
+        this.applyComments([]);
       }
     },
 
@@ -672,6 +938,7 @@
         this.showOsd("请先播放视频");
         return;
       }
+      if (!this.el.video.paused) this.el.video.pause();
       const pos = Math.round(this.el.video.currentTime * 1000);
       const text = await UI.prompt("在 " + Fmt.time(pos) + " 处添加评论：", "", {
         multiline: true,
@@ -679,118 +946,16 @@
       if (!text || !text.trim()) return;
       try {
         await API.post("/api/comments", { path: path, position_ms: pos, text: text.trim() });
-        const data = await API.get("/api/comments", { path: path });
-        this.markers = (data.items || []).map((c) => ({
-          position: c.position_ms,
-          text: c.text,
-        }));
-        this.renderMarkers();
+        await this.refreshCommentsForCurrent();
         this.showOsd("评论已添加（共 " + this.markers.length + " 条）");
       } catch (e) {
         UI.alert(e.message);
       }
     },
 
-    async showComments() {
-      const path = this.paths[this.index];
-      if (!path) {
-        this.showOsd("请先播放视频");
-        return;
-      }
-      let data;
-      try {
-        data = await API.get("/api/comments", { path: path });
-      } catch (e) {
-        UI.alert(e.message);
-        return;
-      }
-      const body = document.createElement("div");
-      const list = document.createElement("div");
-      list.className = "comment-list";
-      body.appendChild(list);
-      let selectedId = null;
-      let modal = null;
-      const render = (items) => {
-        list.innerHTML = "";
-        if (!items.length) {
-          const empty = document.createElement("div");
-          empty.className = "modal-label";
-          empty.textContent = "暂无评论";
-          list.appendChild(empty);
-          return;
-        }
-        for (const comment of items) {
-          const row = document.createElement("div");
-          row.className = "comment-item";
-          row.textContent =
-            "[" + Fmt.time(comment.position_ms) + "] " + String(comment.text).replace(/\n/g, " ");
-          row.addEventListener("click", () => {
-            selectedId = comment.id;
-            Array.from(list.querySelectorAll(".comment-item")).forEach((r) =>
-              r.classList.toggle("selected", r === row)
-            );
-          });
-          row.addEventListener("dblclick", () => {
-            this.el.video.currentTime = comment.position_ms / 1000;
-            if (modal) UI.close(modal.overlay);
-          });
-          list.appendChild(row);
-        }
-      };
-      render(data.items || []);
-      modal = UI.openModal({
-        title: "评论列表",
-        body: body,
-        width: 600,
-        footer: [
-          {
-            label: "编辑",
-            keepOpen: true,
-            onClick: async () => {
-              const current = (data.items || []).find((c) => c.id === selectedId);
-              if (!current) return;
-              const text = await UI.prompt("编辑评论", current.text, { multiline: true });
-              if (!text || !text.trim()) return;
-              try {
-                await API.put("/api/comments/" + selectedId, { text: text.trim() });
-                data = await API.get("/api/comments", { path: path });
-                render(data.items || []);
-                this.refreshMarkers(path);
-              } catch (e) {
-                UI.alert(e.message);
-              }
-            },
-          },
-          {
-            label: "删除",
-            keepOpen: true,
-            onClick: async () => {
-              if (!selectedId) return;
-              if (!(await UI.confirm("确定删除该评论吗？"))) return;
-              try {
-                await API.del("/api/comments/" + selectedId);
-                data = await API.get("/api/comments", { path: path });
-                render(data.items || []);
-                this.refreshMarkers(path);
-              } catch (e) {
-                UI.alert(e.message);
-              }
-            },
-          },
-          { label: "关闭", primary: true },
-        ],
-      });
-    },
-
-    async refreshMarkers(path) {
-      try {
-        const data = await API.get("/api/comments", { path: path });
-        this.markers = (data.items || []).map((c) => ({
-          position: c.position_ms,
-          text: c.text,
-        }));
-        this.renderMarkers();
-      } catch (e) {}
+    showComments() {
+      this.el.playerPanel.classList.remove("hidden");
+      this.switchPanelTab("comments");
     },
   };
 

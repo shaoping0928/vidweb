@@ -181,8 +181,16 @@ def files_info(body: PathsBody):
             "last_position_ms": 0,
             "play_count": 0,
             "last_played_at": 0,
+            "size": 0,
+            "mtime": 0,
             "tags": [],
         }
+        try:
+            st = p.stat()
+            item["size"] = st.st_size
+            item["mtime"] = int(st.st_mtime)
+        except OSError:
+            pass
         if record:
             item["duration_ms"] = record["duration_ms"]
             item["last_position_ms"] = record["last_position_ms"]

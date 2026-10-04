@@ -14,8 +14,7 @@
     playlist: JSON.parse(localStorage.getItem("mw/playlist") || "[]"),
     playlistInfo: {},
     visiblePaths: [],
-    activeTagIds: [],
-    tagMatchAll: false,
+    libFilters: loadLibFilters(),
     tags: [],
     config: {},
     detailPath: "",
@@ -24,10 +23,59 @@
     selectedPaths: [],
     lastSelIndex: -1,
     selListEl: null,
+    serverSettings: null,
+    settingRoots: [],
+    roots: [],
+    parent: "",
   };
 
   function basename(path) {
     return String(path || "").split(/[\\/]/).pop() || "";
+  }
+
+  function pathKey(path) {
+    return String(path || "")
+      .replace(/\//g, "\\")
+      .replace(/\\+$/, "")
+      .toLowerCase();
+  }
+
+  function loadLibFilters() {
+    const defaults = {
+      search: "",
+      status: "all",
+      duration: "all",
+      sort: "name",
+      tagMode: "any",
+      tagNames: [],
+    };
+    try {
+      const saved = JSON.parse(localStorage.getItem("mw/libFilters") || "{}");
+      return Object.assign(defaults, saved);
+    } catch (e) {
+      return defaults;
+    }
+  }
+
+  function saveLibFilters() {
+    localStorage.setItem("mw/libFilters", JSON.stringify(state.libFilters));
+  }
+
+  function restoreLibFilterUI() {
+    $("#plSearch").value = state.libFilters.search || "";
+    $("#plSort").value = state.libFilters.sort || "name";
+    const status = document.querySelector(
+      'input[name="plStatus"][value="' + (state.libFilters.status || "all") + '"]'
+    );
+    if (status) status.checked = true;
+    const duration = document.querySelector(
+      'input[name="plDuration"][value="' + (state.libFilters.duration || "all") + '"]'
+    );
+    if (duration) duration.checked = true;
+    const mode = document.querySelector(
+      'input[name="plTagMode"][value="' + (state.libFilters.tagMode || "any") + '"]'
+    );
+    if (mode) mode.checked = true;
   }
 
   function setStatus(text) {
@@ -39,6 +87,7 @@
     $$("#tabs .tab").forEach((btn) => btn.classList.toggle("active", btn.dataset.tab === name));
     $$(".page").forEach((page) => page.classList.toggle("active", page.id === "page-" + name));
     if (name === "recent") refreshRecent();
+    if (name === "settings") loadSettings();
   }
 
   /* ------------------------------------------------------------ UI */
@@ -305,6 +354,66 @@
     return li;
   }
 
+  /* ------------------------------------------------------------ drives */
+
+  async function loadDrives() {
+    try {
+      const data = await API.get("/api/drives");
+      state.roots = data.roots || [];
+    } catch (e) {
+      state.roots = [];
+    }
+    renderDriveSelect();
+  }
+
+  function renderDriveSelect() {
+    const select = $("#driveSelect");
+    select.innerHTML = "";
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = "选择驱动器";
+    select.appendChild(placeholder);
+    for (const root of state.roots) {
+      const option = document.createElement("option");
+      option.value = root.path;
+      option.textContent = root.total
+        ? root.path + "（可用 " + Fmt.bytes(root.free) + "）"
+        : root.path;
+      select.appendChild(option);
+    }
+    syncDriveSelect(state.path);
+    updatePathUp();
+  }
+
+  function syncDriveSelect(path) {
+    const select = $("#driveSelect");
+    if (!path) {
+      select.value = "";
+      return;
+    }
+    const lower = path.toLowerCase();
+    let best = "";
+    for (const root of state.roots) {
+      const base = root.path.toLowerCase().replace(/[\\/]+$/, "");
+      if (lower === base || lower.startsWith(base + "\\") || lower.startsWith(base + "/")) {
+        if (root.path.length > best.length) best = root.path;
+      }
+    }
+    select.value = best;
+  }
+
+  function samePath(a, b) {
+    const norm = (value) => String(value || "").replace(/[\\/]+$/, "").toLowerCase();
+    return norm(a) === norm(b) && norm(a) !== "";
+  }
+
+  function updatePathUp() {
+    const atRoot =
+      state.roots.some((root) => samePath(root.path, state.path)) ||
+      samePath(state.path, state.parent);
+    $("#pathUp").disabled = atRoot || !state.parent;
+  }
+
   /* ------------------------------------------------------------ path browser */
 
   let filterTimer = null;
@@ -318,8 +427,11 @@
         sort: state.sort,
       });
       state.path = data.path;
+      state.parent = data.parent || "";
       state.entries = data.entries;
       $("#pathInput").value = data.path;
+      syncDriveSelect(data.path);
+      updatePathUp();
       localStorage.setItem("mw/lastPath", data.path);
       renderFileList();
     } catch (e) {
@@ -433,11 +545,26 @@
     try {
       UI.toast("正在扫描...");
       const data = await API.post("/api/scan", { path });
-      state.playlist = data.files.slice();
+      const existing = new Set(state.playlist.map(pathKey));
+      let added = 0;
+      let skipped = 0;
+      for (const file of data.files || []) {
+        const key = pathKey(file);
+        if (existing.has(key)) {
+          skipped++;
+          continue;
+        }
+        existing.add(key);
+        state.playlist.push(file);
+        added++;
+      }
       savePlaylistLocal();
       await refreshPlaylistView();
       setTab("lib");
-      UI.toast("扫描到视频 " + data.count + " 个");
+      UI.toast(
+        "扫描到视频 " + data.count + " 个，新增 " + added + " 个" +
+          (skipped ? "（重复 " + skipped + " 个已跳过）" : "")
+      );
     } catch (e) {
       UI.alert(e.message);
     }
@@ -450,11 +577,12 @@
   }
 
   async function addFilesToPlaylist(paths) {
-    const existing = new Set(state.playlist);
+    const existing = new Set(state.playlist.map(pathKey));
     let changed = false;
     for (const path of paths || []) {
-      if (!path || existing.has(path)) continue;
-      existing.add(path);
+      const key = pathKey(path);
+      if (!path || !key || existing.has(key)) continue;
+      existing.add(key);
       state.playlist.push(path);
       changed = true;
     }
@@ -469,6 +597,7 @@
       state.visiblePaths = [];
       state.playlistInfo = {};
       renderPlaylist();
+      updateLibSummary();
       return;
     }
     try {
@@ -477,20 +606,83 @@
       info.items.forEach((item) => {
         state.playlistInfo[item.path] = item;
       });
-      if (state.activeTagIds.length) {
-        const filtered = await API.post("/api/playlist/filter", {
-          paths: state.playlist,
-          tag_ids: state.activeTagIds,
-          match_all: state.tagMatchAll,
-        });
-        state.visiblePaths = filtered.items;
-      } else {
-        state.visiblePaths = state.playlist.slice();
-      }
+      state.visiblePaths = applyLibFilters(state.playlist, state.playlistInfo);
       renderPlaylist();
+      updateLibSummary();
     } catch (e) {
       UI.toast("播放列表刷新失败: " + e.message);
     }
+  }
+
+  const collator = new Intl.Collator("zh-Hans-CN", { sensitivity: "base", numeric: true });
+
+  function applyLibFilters(paths, info) {
+    const filters = state.libFilters;
+    const keyword = (filters.search || "").trim().toLowerCase();
+    const tagNames = filters.tagNames || [];
+    const tagModeAll = filters.tagMode === "all";
+    let list = paths.filter((path) => {
+      const item = info[path] || {};
+      const name = item.name || basename(path);
+      if (keyword && !name.toLowerCase().includes(keyword)) return false;
+      const exists = item.exists !== false;
+      if (filters.status === "missing") return !exists;
+      if (!exists) return false;
+      if (filters.status === "new" && (item.play_count || 0) > 0) return false;
+      if (filters.status === "played" && (item.play_count || 0) <= 0) return false;
+      if (filters.status === "progress" && !(item.last_position_ms > 0)) return false;
+      const duration = item.duration_ms || 0;
+      if (filters.duration === "unknown" && duration > 0) return false;
+      if (filters.duration === "short" && !(duration > 0 && duration <= 600000)) return false;
+      if (filters.duration === "medium" && !(duration > 600000 && duration <= 1800000)) return false;
+      if (filters.duration === "long" && !(duration > 1800000)) return false;
+      if (tagNames.length) {
+        const own = item.tags || [];
+        const owned = new Set(own.map((t) => t.toLowerCase()));
+        const hit = tagModeAll
+          ? tagNames.every((t) => owned.has(t.toLowerCase()))
+          : tagNames.some((t) => owned.has(t.toLowerCase()));
+        if (!hit) return false;
+      }
+      return true;
+    });
+    const by = filters.sort;
+    const metric = (path) => {
+      const item = info[path] || {};
+      switch (by) {
+        case "recent":
+          return item.last_played_at || 0;
+        case "plays":
+          return item.play_count || 0;
+        case "duration":
+          return item.duration_ms || 0;
+        case "size":
+          return item.size || 0;
+        case "mtime":
+          return item.mtime || 0;
+        default:
+          return 0;
+      }
+    };
+    list = list.slice();
+    if (by === "name" || by === "name_desc") {
+      list.sort((a, b) =>
+        collator.compare(
+          (info[a] || {}).name || basename(a),
+          (info[b] || {}).name || basename(b)
+        )
+      );
+      if (by === "name_desc") list.reverse();
+    } else {
+      list.sort((a, b) => metric(b) - metric(a));
+    }
+    return list;
+  }
+
+  function updateLibSummary() {
+    $("#plSummary").textContent = state.playlist.length
+      ? "共 " + state.playlist.length + " 个 · 显示 " + state.visiblePaths.length + " 个"
+      : "播放列表为空";
   }
 
   function renderPlaylist() {
@@ -559,29 +751,48 @@
     } catch (e) {
       state.tags = [];
     }
-    const select = $("#tagFilter");
-    const current = select.value;
-    select.innerHTML = "";
-    const all = document.createElement("option");
-    all.value = "";
-    all.textContent = "全部（当前列表）";
-    select.appendChild(all);
-    for (const tag of state.tags) {
-      const option = document.createElement("option");
-      option.value = tag.id;
-      option.textContent = tag.name;
-      select.appendChild(option);
-    }
-    const valid = new Set(state.tags.map((t) => t.id));
-    state.activeTagIds = state.activeTagIds.filter((id) => valid.has(id));
-    if (current && valid.has(Number(current))) select.value = current;
-    else select.value = "";
-    updateTagMultiButton();
+    const valid = new Set(state.tags.map((t) => t.name));
+    state.libFilters.tagNames = (state.libFilters.tagNames || []).filter((n) =>
+      valid.has(n)
+    );
+    renderLibTagList();
   }
 
-  function updateTagMultiButton() {
-    $("#tagMulti").textContent =
-      state.activeTagIds.length > 1 ? "多标签(" + state.activeTagIds.length + ")" : "多标签";
+  function renderLibTagList() {
+    const box = $("#plTagList");
+    if (!box) return;
+    box.innerHTML = "";
+    $("#plTagEmpty").classList.toggle("hidden", state.tags.length > 0);
+    for (const tag of state.tags) {
+      const label = document.createElement("label");
+      label.className = "check";
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = state.libFilters.tagNames.includes(tag.name);
+      const dot = document.createElement("span");
+      dot.className = "dot";
+      dot.style.background = tag.color || "#5c636e";
+      const name = document.createElement("span");
+      name.textContent = tag.name;
+      const count = document.createElement("span");
+      count.className = "count";
+      count.textContent = tag.file_count;
+      label.append(checkbox, dot, name, count);
+      checkbox.addEventListener("change", () => {
+        if (checkbox.checked) {
+          if (!state.libFilters.tagNames.includes(tag.name)) {
+            state.libFilters.tagNames.push(tag.name);
+          }
+        } else {
+          state.libFilters.tagNames = state.libFilters.tagNames.filter(
+            (n) => n !== tag.name
+          );
+        }
+        saveLibFilters();
+        refreshPlaylistView();
+      });
+      box.appendChild(label);
+    }
   }
 
   async function editTags(paths) {
@@ -674,73 +885,6 @@
             } catch (e) {
               UI.alert(e.message);
             }
-          },
-        },
-      ],
-    });
-  }
-
-  async function multiTagFilter() {
-    let data;
-    try {
-      data = await API.get("/api/tags");
-    } catch (e) {
-      UI.alert(e.message);
-      return;
-    }
-    const body = document.createElement("div");
-    const listWrap = document.createElement("div");
-    listWrap.className = "check-list";
-    const checkboxes = new Map();
-    for (const tag of data.items) {
-      const row = document.createElement("label");
-      row.className = "check-row";
-      const cb = document.createElement("input");
-      cb.type = "checkbox";
-      cb.checked = state.activeTagIds.includes(tag.id);
-      checkboxes.set(tag.id, cb);
-      const dot = document.createElement("span");
-      dot.className = "dot";
-      dot.style.background = tag.color || "#5c636e";
-      const label = document.createElement("span");
-      label.textContent = tag.name;
-      row.append(cb, dot, label);
-      listWrap.appendChild(row);
-    }
-    body.appendChild(listWrap);
-    const radios = document.createElement("div");
-    radios.className = "radio-row";
-    const anyRadio = document.createElement("input");
-    anyRadio.type = "radio";
-    anyRadio.name = "tagMatch";
-    anyRadio.checked = !state.tagMatchAll;
-    const allRadio = document.createElement("input");
-    allRadio.type = "radio";
-    allRadio.name = "tagMatch";
-    allRadio.checked = state.tagMatchAll;
-    const anyLabel = document.createElement("label");
-    anyLabel.append(anyRadio, document.createTextNode("匹配任一标签"));
-    const allLabel = document.createElement("label");
-    allLabel.append(allRadio, document.createTextNode("匹配全部标签"));
-    radios.append(anyLabel, allLabel);
-    body.appendChild(radios);
-    UI.openModal({
-      title: "多标签筛选",
-      body,
-      width: 360,
-      footer: [
-        { label: "取消" },
-        {
-          label: "确定",
-          primary: true,
-          onClick: async () => {
-            state.activeTagIds = Array.from(checkboxes.entries())
-              .filter(([, cb]) => cb.checked)
-              .map(([id]) => id);
-            state.tagMatchAll = allRadio.checked;
-            $("#tagFilter").value = "";
-            updateTagMultiButton();
-            await refreshPlaylistView();
           },
         },
       ],
@@ -999,6 +1143,152 @@
     }
   }
 
+  /* ------------------------------------------------------------ settings */
+
+  async function refreshConfig() {
+    try {
+      state.config = await API.get("/api/config");
+    } catch (e) {
+      return;
+    }
+    const banner = $("#ffmpegBanner");
+    if (!state.config.ffmpeg) {
+      banner.textContent =
+        "未检测到 ffmpeg：缩略图与媒体信息探测不可用（不影响播放与媒体库）。可在「设置」页填写 ffmpeg/ffprobe 路径。";
+      banner.classList.remove("hidden");
+    } else {
+      banner.classList.add("hidden");
+    }
+  }
+
+  function renderSettingRoots() {
+    const list = $("#setRoots");
+    list.innerHTML = "";
+    if (!state.settingRoots.length) {
+      const li = document.createElement("li");
+      li.className = "label";
+      li.textContent = "（未设置，默认允许访问所有本地磁盘）";
+      list.appendChild(li);
+      return;
+    }
+    for (const path of state.settingRoots) {
+      const li = document.createElement("li");
+      li.className = "entry";
+      li.dataset.path = path;
+      const name = document.createElement("span");
+      name.className = "entry-name";
+      name.textContent = path;
+      li.appendChild(name);
+      list.appendChild(li);
+    }
+  }
+
+  async function loadSettings() {
+    let data;
+    try {
+      data = await API.get("/api/settings");
+    } catch (e) {
+      UI.toast("读取设置失败: " + e.message);
+      return;
+    }
+    state.serverSettings = data;
+    state.settingRoots = (data.allowed_roots || []).slice();
+    $("#setHost").value = data.host;
+    $("#setPort").value = data.port;
+    $("#setFfmpeg").value = data.ffmpeg;
+    $("#setFfprobe").value = data.ffprobe;
+    $("#setDataDir").textContent = data.data_dir;
+    $("#setConfigFile").textContent = data.config_file;
+    $("#setToolStatus").textContent = data.ffmpeg_resolved
+      ? "当前生效: " + data.ffmpeg_resolved
+      : "当前未检测到 ffmpeg";
+    renderSettingRoots();
+
+    const defaults = loadPlayerDefaults();
+    $("#setVolume").value = String(defaults.volume);
+    $("#setSpeed").value = String(defaults.speed);
+    $("#setMode").value = String(defaults.mode);
+    $("#setDanmaku").checked = defaults.danmaku;
+    $("#setDanmakuSpeed").value = String(defaults.danmakuSpeed);
+    updatePlayerDefaultLabels();
+  }
+
+  function loadPlayerDefaults() {
+    let defaults = {};
+    try {
+      defaults = JSON.parse(localStorage.getItem("mw/defaults") || "{}");
+    } catch (e) {
+      defaults = {};
+    }
+    return {
+      volume: defaults.volume !== undefined ? Number(defaults.volume) : 80,
+      speed: defaults.speed !== undefined ? Number(defaults.speed) : 10,
+      mode: defaults.mode !== undefined ? Number(defaults.mode) : 0,
+      danmaku: defaults.danmaku !== undefined ? !!defaults.danmaku : true,
+      danmakuSpeed: defaults.danmakuSpeed !== undefined ? Number(defaults.danmakuSpeed) : 8000,
+    };
+  }
+
+  function updatePlayerDefaultLabels() {
+    $("#setVolumeText").textContent = $("#setVolume").value;
+    $("#setSpeedText").textContent = (Number($("#setSpeed").value) / 10).toFixed(1) + "x";
+  }
+
+  async function saveServerSettings() {
+    try {
+      const res = await API.put("/api/settings", {
+        host: $("#setHost").value.trim(),
+        port: Number($("#setPort").value),
+        allowed_roots: state.settingRoots,
+        ffmpeg: $("#setFfmpeg").value.trim(),
+        ffprobe: $("#setFfprobe").value.trim(),
+      });
+      await refreshConfig();
+      await loadDrives();
+      await loadSettings();
+      UI.toast(
+        res.restart_required
+          ? "已保存；监听地址/端口需重启服务后生效"
+          : "服务器设置已保存"
+      );
+    } catch (e) {
+      UI.alert(e.message);
+    }
+  }
+
+  async function testTool(tool, inputId, statusEl) {
+    const path = $(inputId).value.trim();
+    if (!path) {
+      statusEl.textContent = "请先填写路径或命令名";
+      return;
+    }
+    statusEl.textContent = "检测中...";
+    try {
+      const res = await API.post("/api/settings/test-tool", { path, tool });
+      $(inputId).value = res.resolved;
+      statusEl.textContent = tool + " 可用：" + res.version;
+    } catch (e) {
+      statusEl.textContent = tool + " 检测失败：" + e.message;
+    }
+  }
+
+  function savePlayerDefaults() {
+    const defaults = {
+      volume: Number($("#setVolume").value),
+      speed: Number($("#setSpeed").value),
+      mode: Number($("#setMode").value),
+      danmaku: $("#setDanmaku").checked,
+      danmakuSpeed: Number($("#setDanmakuSpeed").value),
+    };
+    localStorage.setItem("mw/defaults", JSON.stringify(defaults));
+    localStorage.setItem("mw/volume", String(defaults.volume));
+    localStorage.setItem("mw/speed", String(defaults.speed));
+    localStorage.setItem("mw/mode", String(defaults.mode));
+    localStorage.setItem("mw/danmaku", defaults.danmaku ? "1" : "0");
+    localStorage.setItem("mw/danmakuSpeed", String(defaults.danmakuSpeed));
+    UI.toast("播放器默认值已保存");
+  }
+
   /* ------------------------------------------------------------ about */
 
   function showAbout() {
@@ -1008,7 +1298,9 @@
       ["↑ / ↓", "音量 ±5"],
       ["F", "全屏切换"],
       ["M", "静音"],
-      ["L", "播放列表"],
+      ["L", "信息面板显示/隐藏"],
+      ["D", "弹幕开关"],
+      ["Ctrl+L", "评论列表（面板）"],
       ["S", "字幕开关"],
       ["[ / ]", "字幕延迟 -/+ 100ms"],
       ["N", "添加评论"],
@@ -1053,6 +1345,14 @@
     });
 
     $("#pathGo").addEventListener("click", () => browse($("#pathInput").value.trim()));
+    $("#driveSelect").addEventListener("change", () => {
+      const value = $("#driveSelect").value;
+      if (value) browse(value);
+    });
+    $("#pathUp").addEventListener("click", () => {
+      if ($("#pathUp").disabled || !state.parent) return;
+      browse(state.parent);
+    });
     $("#pathInput").addEventListener("keydown", (e) => {
       if (e.key === "Enter") browse($("#pathInput").value.trim());
     });
@@ -1290,14 +1590,55 @@
       savePlaylistLocal();
       await refreshPlaylistView();
     });
-    $("#tagFilter").addEventListener("change", async () => {
-      const value = $("#tagFilter").value;
-      state.activeTagIds = value ? [Number(value)] : [];
-      state.tagMatchAll = false;
-      updateTagMultiButton();
-      await refreshPlaylistView();
+    let libFilterTimer = null;
+    $("#plSearch").addEventListener("input", () => {
+      clearTimeout(libFilterTimer);
+      libFilterTimer = setTimeout(() => {
+        state.libFilters.search = $("#plSearch").value;
+        saveLibFilters();
+        refreshPlaylistView();
+      }, 200);
     });
-    $("#tagMulti").addEventListener("click", multiTagFilter);
+    $$('input[name="plStatus"]').forEach((radio) =>
+      radio.addEventListener("change", () => {
+        state.libFilters.status = radio.value;
+        saveLibFilters();
+        refreshPlaylistView();
+      })
+    );
+    $$('input[name="plDuration"]').forEach((radio) =>
+      radio.addEventListener("change", () => {
+        state.libFilters.duration = radio.value;
+        saveLibFilters();
+        refreshPlaylistView();
+      })
+    );
+    $$('input[name="plTagMode"]').forEach((radio) =>
+      radio.addEventListener("change", () => {
+        state.libFilters.tagMode = radio.value;
+        saveLibFilters();
+        refreshPlaylistView();
+      })
+    );
+    $("#plSort").addEventListener("change", () => {
+      state.libFilters.sort = $("#plSort").value;
+      saveLibFilters();
+      refreshPlaylistView();
+    });
+    $("#plResetFilters").addEventListener("click", () => {
+      state.libFilters = {
+        search: "",
+        status: "all",
+        duration: "all",
+        sort: "name",
+        tagMode: "any",
+        tagNames: [],
+      };
+      saveLibFilters();
+      restoreLibFilterUI();
+      renderLibTagList();
+      refreshPlaylistView();
+    });
     $("#tagManage").addEventListener("click", manageTags);
 
     $("#recentRefresh").addEventListener("click", refreshRecent);
@@ -1315,25 +1656,50 @@
     $("#searchInput").addEventListener("keydown", (e) => {
       if (e.key === "Enter") doSearch();
     });
+
+    $("#setVolume").addEventListener("input", updatePlayerDefaultLabels);
+    $("#setSpeed").addEventListener("input", updatePlayerDefaultLabels);
+    $("#setPlayerSave").addEventListener("click", savePlayerDefaults);
+    $("#setServerSave").addEventListener("click", saveServerSettings);
+    $("#setFfmpegTest").addEventListener("click", () =>
+      testTool("ffmpeg", "#setFfmpeg", $("#setToolStatus"))
+    );
+    $("#setFfprobeTest").addEventListener("click", () =>
+      testTool("ffprobe", "#setFfprobe", $("#setToolStatus"))
+    );
+    $("#setRootAdd").addEventListener("click", async () => {
+      const path = await UI.prompt("添加允许访问的根目录（绝对路径）", "");
+      if (!path) return;
+      if (!state.settingRoots.includes(path)) state.settingRoots.push(path);
+      renderSettingRoots();
+      UI.toast("已添加，点击「保存服务器设置」后生效");
+    });
+    $("#setRootRemove").addEventListener("click", () => {
+      const selected = state.selectedPaths.find((p) => state.settingRoots.includes(p));
+      if (!selected) {
+        UI.alert("请先在列表中选择要移除的目录");
+        return;
+      }
+      state.settingRoots = state.settingRoots.filter((p) => p !== selected);
+      renderSettingRoots();
+      UI.toast("已移除，点击「保存服务器设置」后生效");
+    });
+    $("#setRoots").addEventListener("click", (e) => {
+      const li = e.target.closest("li.entry");
+      if (!li) return;
+      handleItemClick(e, $("#setRoots"), state.settingRoots, li);
+    });
   }
 
   /* ------------------------------------------------------------ init */
 
   async function init() {
-    try {
-      state.config = await API.get("/api/config");
-    } catch (e) {
-      state.config = {};
-    }
-    if (!state.config.ffmpeg) {
-      const banner = $("#ffmpegBanner");
-      banner.textContent =
-        "未检测到 ffmpeg：缩略图与媒体信息探测不可用（不影响播放与媒体库）。可在 config.json 的 ffmpeg/ffprobe 字段填写可执行文件路径。";
-      banner.classList.remove("hidden");
-    }
+    await refreshConfig();
     bindEvents();
+    restoreLibFilterUI();
     await refreshTagFilter();
     await loadLibraryDirs();
+    await loadDrives();
     await browse(state.path);
     await refreshPlaylistView();
     setTab("path");

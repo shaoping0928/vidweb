@@ -1,4 +1,5 @@
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -80,9 +81,18 @@ def browse(path: str = "", filter: str = "", only_video: bool = False, sort: int
 
 @router.get("/drives")
 def drives():
-    return {
-        "roots": [{"path": str(root), "name": str(root)} for root in config.allowed_roots()]
-    }
+    roots = []
+    for root in config.allowed_roots():
+        value = str(root)
+        item = {"path": value, "name": value, "total": 0, "free": 0}
+        try:
+            usage = shutil.disk_usage(value)
+            item["total"] = usage.total
+            item["free"] = usage.free
+        except OSError:
+            pass
+        roots.append(item)
+    return {"roots": roots}
 
 
 @router.post("/explore")
