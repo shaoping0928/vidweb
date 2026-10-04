@@ -1708,29 +1708,6 @@ select {
   background: #05070a;
 }
 
-#playerHeader {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 16px;
-  background: var(--bg);
-  border-bottom: 1px solid var(--border-soft);
-}
-
-#playerHeader .spacer {
-  flex: 1;
-}
-
-#playerTitle {
-  font-size: 13.5px;
-  color: var(--text-2);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 42vw;
-}
-
 #playerBody {
   flex: 1;
   display: flex;
@@ -1792,21 +1769,6 @@ select {
 
 #danmakuLayer.dm-paused .danmaku-item {
   animation-play-state: paused;
-}
-
-#subtitleOverlay {
-  position: absolute;
-  left: 50%;
-  bottom: 92px;
-  transform: translateX(-50%);
-  max-width: 90%;
-  text-align: center;
-  color: #fff;
-  font-size: 19px;
-  font-weight: 600;
-  text-shadow: 0 2px 5px rgba(0, 0, 0, 0.95);
-  pointer-events: none;
-  white-space: pre-line;
 }
 
 #playerOsd {
@@ -1984,6 +1946,85 @@ select {
 
 .control-row input[type="range"] {
   width: 90px;
+}
+
+.control-row .spacer {
+  flex: 1;
+}
+
+#btnPrev,
+#btnNext,
+#btnVolume,
+#btnPanelToggle,
+#btnFullscreen {
+  display: inline-grid;
+  place-items: center;
+  padding: 5px 9px;
+}
+
+#btnPrev svg,
+#btnNext svg,
+#btnVolume svg,
+#btnPanelToggle svg,
+#btnFullscreen svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+#btnVolume.muted {
+  color: var(--danger);
+}
+
+.popover-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.popover {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 11px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  z-index: 30;
+  white-space: nowrap;
+}
+
+.popover > * {
+  flex: 0 0 auto;
+}
+
+.popover button {
+  white-space: nowrap;
+}
+
+.popover input[type="range"] {
+  width: 132px;
+}
+
+.popover .mono {
+  min-width: 34px;
+  text-align: right;
+  color: var(--text-2);
+}
+
+.popover button {
+  background: var(--surface-3);
+  border-color: var(--border);
+  color: var(--text);
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.popover button:hover {
+  background: #2b3950;
 }
 
 .control-row .label {

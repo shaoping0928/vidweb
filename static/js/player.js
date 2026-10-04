@@ -4,12 +4,7 @@
   const Player = {
     paths: [],
     index: -1,
-    mode: 0,
     markers: [],
-    cues: [],
-    subName: "",
-    subVisible: true,
-    subDelay: 0,
     dragging: false,
     pendingResume: -1,
     resumeApplied: true,
@@ -57,15 +52,16 @@
         this.transcodeOn = false;
       }
       const ids = [
-        "video", "subtitleOverlay", "playerOsd", "playerHeader", "playerTitle",
-        "playerStage", "playerMain", "playerBody", "playerPanel", "playerPlaylistView", "playerBack",
+        "video", "playerOsd",
+        "playerStage", "playerMain", "playerBody", "playerPanel", "playerPlaylistView",
         "progressTrack", "progressFill", "progressHandle", "progressMarkers", "progressTip",
         "progressWrap", "progressPreview", "progressPreviewImg", "progressPreviewTime",
         "playerShotList", "btnShotPanel",
-        "timeNow", "timeTotal", "btnPrev", "btnPlay", "btnNext", "btnMode", "btnList", "btnAspect",
+        "timeNow", "timeTotal", "btnPrev", "btnPlay", "btnNext", "btnAspect",
         "btnSnap", "btnMute", "volume", "volText", "speed", "speedText", "btnFullscreen",
-        "btnLoadSub", "btnToggleSub", "btnAddComment", "btnAddCommentPanel", "btnPanelToggle",
-        "subtitleFileInput", "danmakuLayer", "btnDanmaku", "playerCommentList",
+        "btnVolume", "btnSpeed", "volumePopover", "speedPopover",
+        "btnAddCommentPanel", "btnPanelToggle",
+        "danmakuLayer", "btnDanmaku", "playerCommentList",
         "playerPlaylistPager",
       ];
       ids.forEach((id) => {
@@ -73,8 +69,6 @@
       });
       this.el.playerPage = document.getElementById("page-player");
       const defaults = window.Prefs ? Prefs.getJSON("mw/defaults", {}) : {};
-      const modeRaw = window.Prefs ? Prefs.get("mw/mode", null) : null;
-      this.mode = modeRaw !== null ? parseInt(modeRaw, 10) || 0 : parseInt(defaults.mode, 10) || 0;
       const volumeRaw = window.Prefs ? Prefs.get("mw/volume", null) : null;
       this.el.volume.value =
         volumeRaw !== null ? volumeRaw : String(defaults.volume !== undefined ? defaults.volume : 80);
@@ -91,7 +85,6 @@
       this.startDanmakuLoop();
       this.applyVolume();
       this.applySpeed();
-      this.updateModeButton();
       this.bind();
     },
 
@@ -100,20 +93,26 @@
       el.btnPlay.addEventListener("click", () => this.toggle());
       el.btnPrev.addEventListener("click", () => this.playIndex(this.index - 1));
       el.btnNext.addEventListener("click", () => this.playIndex(this.index + 1));
-      el.btnMode.addEventListener("click", () => this.cycleMode());
-      el.btnList.addEventListener("click", () => this.togglePanel());
       el.btnPanelToggle.addEventListener("click", () => this.togglePanel());
       el.btnDanmaku.addEventListener("click", () => this.setDanmaku(!this.danmakuOn));
-      el.playerBack.addEventListener("click", () => this.close());
       el.btnMute.addEventListener("click", () => this.toggleMute());
       el.btnAspect.addEventListener("click", () => this.cycleAspect());
       el.btnSnap.addEventListener("click", () => this.snapshot());
       el.btnFullscreen.addEventListener("click", () => this.toggleFullscreen());
-      el.btnToggleSub.addEventListener("click", () => this.toggleSub());
-      el.btnLoadSub.addEventListener("click", () => el.subtitleFileInput.click());
-      el.btnAddComment.addEventListener("click", () => this.addComment());
       el.btnAddCommentPanel.addEventListener("click", () => this.addComment());
       el.btnShotPanel.addEventListener("click", () => this.snapshot());
+      el.btnVolume.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.togglePopover("volumePopover");
+      });
+      el.btnSpeed.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.togglePopover("speedPopover");
+      });
+      document.addEventListener("click", (e) => {
+        if (e.target.closest(".popover-wrap")) return;
+        this.closePopovers();
+      });
       Array.from(document.querySelectorAll(".ptab-btn")).forEach((btn) => {
         btn.addEventListener("click", () => this.switchPanelTab(btn.dataset.ptab));
       });
@@ -124,11 +123,6 @@
       el.speed.addEventListener("input", () => {
         this.applySpeed();
         if (window.Prefs) Prefs.set("mw/speed", el.speed.value);
-      });
-      el.subtitleFileInput.addEventListener("change", () => {
-        const file = el.subtitleFileInput.files[0];
-        if (file) this.uploadSubtitle(file);
-        el.subtitleFileInput.value = "";
       });
       el.playerStage.addEventListener("dblclick", (e) => {
         if (e.target.closest("#controls")) return;
@@ -145,7 +139,6 @@
       video.addEventListener("timeupdate", () => {
         this.updateProgress();
         this.checkUndecodable();
-        this.updateSubtitle();
         if (Date.now() - this.lastSaveTs > 5000) {
           this.lastSaveTs = Date.now();
           this.saveProgress();
@@ -266,11 +259,6 @@
       this.streamOffsetMs = 0;
       this.streamDurationMs = 0;
       this.pendingSeekMs = null;
-      this.cues = [];
-      this.subName = "";
-      this.subVisible = true;
-      this.subDelay = 0;
-      this.el.subtitleOverlay.textContent = "";
       this.markers = [];
       this.renderMarkers();
       this.clearDanmaku();
@@ -285,7 +273,6 @@
       this.updatePlaylistSelection();
       API.post("/api/files/played", { path }).catch(() => {});
       this.loadComments(path, token);
-      this.loadSubtitle(path, token);
       try {
         const detail = await API.get("/api/files/detail", { path });
         if (token !== this.loadToken) return;
@@ -329,11 +316,7 @@
 
     onEnded() {
       this.saveProgress();
-      const count = this.paths.length;
-      if (this.mode === 2) this.playIndex(this.index);
-      else if (this.mode === 3) this.playIndex(Math.floor(Math.random() * count));
-      else if (this.mode === 1) this.playIndex(this.index + 1);
-      else if (this.index + 1 < count) this.playIndex(this.index + 1);
+      this.showOsd("播放结束");
     },
 
     toggle() {
@@ -579,14 +562,19 @@
       if (this.el.progressPreview) this.el.progressPreview.classList.add("hidden");
     },
 
-    close() {
+    pauseForLeave() {
       this.stopArrowHold();
       this.hidePreview();
       this.saveProgress();
       this.stopStream();
+      this.closePopovers();
       this.el.video.pause();
-      if (window.APP && window.APP.setTab) window.APP.setTab("lib");
       if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    },
+
+    close() {
+      this.pauseForLeave();
+      if (window.APP && window.APP.setTab) window.APP.setTab("lib");
       if (window.APP && window.APP.onPlayerClosed) window.APP.onPlayerClosed();
     },
 
@@ -623,8 +611,8 @@
 
     updateTitle() {
       const path = this.paths[this.index] || "";
-      this.el.playerTitle.textContent =
-        this.index + 1 + "/" + this.paths.length + " - " + path.split(/[\\/]/).pop();
+      const title = this.index + 1 + "/" + this.paths.length + " - " + path.split(/[\\/]/).pop();
+      document.title = title;
     },
 
     playlistPageSize() {
@@ -711,6 +699,21 @@
 
     togglePanel() {
       this.el.playerPanel.classList.toggle("hidden");
+    },
+
+    togglePopover(id) {
+      const target = document.getElementById(id);
+      if (!target) return;
+      const wasHidden = target.classList.contains("hidden");
+      this.closePopovers();
+      if (wasHidden) target.classList.remove("hidden");
+    },
+
+    closePopovers() {
+      ["volumePopover", "speedPopover"].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.classList.add("hidden");
+      });
     },
 
     switchPanelTab(name) {
@@ -976,17 +979,6 @@
       } catch (e) {}
     },
 
-    cycleMode() {
-      this.mode = (this.mode + 1) % 4;
-      if (window.Prefs) Prefs.set("mw/mode", this.mode);
-      this.updateModeButton();
-    },
-
-    updateModeButton() {
-      const names = ["顺序", "列表循环", "单曲循环", "随机"];
-      this.el.btnMode.textContent = names[this.mode] || names[0];
-    },
-
     applyVolume() {
       const value = Number(this.el.volume.value) || 0;
       this.el.video.volume = Math.min(1, Math.max(0, value / 100));
@@ -1002,14 +994,17 @@
     toggleMute() {
       const video = this.el.video;
       video.muted = !video.muted;
-      this.el.btnMute.textContent = video.muted ? "已静音" : "音量";
+      this.el.btnMute.textContent = video.muted ? "取消静音" : "静音";
+      if (this.el.btnVolume) this.el.btnVolume.classList.toggle("muted", video.muted);
       this.showOsd(video.muted ? "已静音" : "音量: " + this.el.volume.value);
     },
 
     applySpeed() {
       const value = Number(this.el.speed.value) || 10;
       this.el.video.playbackRate = value / 10;
-      this.el.speedText.textContent = (value / 10).toFixed(1) + "x";
+      const text = (value / 10).toFixed(1) + "x";
+      this.el.speedText.textContent = text;
+      if (this.el.btnSpeed) this.el.btnSpeed.textContent = text;
     },
 
     cycleAspect() {
@@ -1313,16 +1308,6 @@
         case "D":
           this.toggleDanmaku();
           break;
-        case "s":
-        case "S":
-          this.toggleSub();
-          break;
-        case "[":
-          this.adjustSubtitleDelay(-100);
-          break;
-        case "]":
-          this.adjustSubtitleDelay(100);
-          break;
         case "n":
         case "N":
           this.addComment();
@@ -1371,79 +1356,6 @@
           this.showOsd("截图保存失败");
         }
       }, "image/png");
-    },
-
-    /* -------------------------------------------------------- subtitles */
-
-    async loadSubtitle(path, token) {
-      try {
-        const data = await API.get("/api/subtitles", { path: path });
-        if (token !== this.loadToken) return;
-        if (data.cues && data.cues.length) {
-          this.cues = data.cues;
-          this.subName = data.name || "";
-          this.subVisible = true;
-          this.subDelay = 0;
-          this.updateSubtitle();
-        } else {
-          this.cues = [];
-          this.subName = "";
-        }
-      } catch (e) {
-        this.cues = [];
-      }
-    },
-
-    async uploadSubtitle(file) {
-      const form = new FormData();
-      form.append("file", file);
-      try {
-        const res = await fetch("/api/subtitles/parse", { method: "POST", body: form });
-        if (!res.ok) throw new Error("parse failed");
-        const data = await res.json();
-        if (!data.cues || !data.cues.length) {
-          this.showOsd("字幕加载失败");
-          return;
-        }
-        this.cues = data.cues;
-        this.subName = data.name || file.name;
-        this.subVisible = true;
-        this.subDelay = 0;
-        this.updateSubtitle();
-        this.showOsd("字幕已加载: " + this.subName);
-      } catch (e) {
-        this.showOsd("字幕加载失败");
-      }
-    },
-
-    updateSubtitle() {
-      const overlay = this.el.subtitleOverlay;
-      if (!this.subVisible || !this.cues.length) {
-        if (overlay.textContent) overlay.textContent = "";
-        return;
-      }
-      const pos = this.videoPositionMs() - this.subDelay;
-      let text = "";
-      for (const cue of this.cues) {
-        if (pos >= cue.start && pos <= cue.end) {
-          text = cue.text;
-          break;
-        }
-      }
-      if (overlay.textContent !== text) overlay.textContent = text;
-    },
-
-    toggleSub() {
-      this.subVisible = !this.subVisible;
-      if (this.subVisible) this.updateSubtitle();
-      else this.el.subtitleOverlay.textContent = "";
-      this.showOsd(this.subVisible ? "字幕: 开" : "字幕: 关");
-    },
-
-    adjustSubtitleDelay(delta) {
-      this.subDelay += delta;
-      this.updateSubtitle();
-      this.showOsd("字幕延迟: " + this.subDelay + "ms");
     },
 
     /* -------------------------------------------------------- comments */

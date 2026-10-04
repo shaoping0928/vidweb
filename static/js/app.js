@@ -325,6 +325,14 @@
   };
 
   function setTab(name) {
+    if (
+      state.tab === "player" &&
+      name !== "player" &&
+      window.Player &&
+      window.Player.pauseForLeave
+    ) {
+      window.Player.pauseForLeave();
+    }
     state.tab = name;
     $$("#tabs .tab").forEach((btn) => btn.classList.toggle("active", btn.dataset.tab === name));
     const title = $("#pageTitle");
@@ -2266,7 +2274,6 @@
     const defaults = loadPlayerDefaults();
     $("#setVolume").value = String(defaults.volume);
     $("#setSpeed").value = String(defaults.speed);
-    $("#setMode").value = String(defaults.mode);
     $("#setDanmaku").checked = defaults.danmaku;
     $("#setDanmakuSpeed").value = String(defaults.danmakuSpeed);
     $("#setPageSize").value = String(pageSize());
@@ -2285,7 +2292,6 @@
     return {
       volume: defaults.volume !== undefined ? Number(defaults.volume) : 80,
       speed: defaults.speed !== undefined ? Number(defaults.speed) : 10,
-      mode: defaults.mode !== undefined ? Number(defaults.mode) : 0,
       danmaku: defaults.danmaku !== undefined ? !!defaults.danmaku : true,
       danmakuSpeed: defaults.danmakuSpeed !== undefined ? Number(defaults.danmakuSpeed) : 8000,
     };
@@ -2380,14 +2386,12 @@
     const defaults = {
       volume: Number($("#setVolume").value),
       speed: Number($("#setSpeed").value),
-      mode: Number($("#setMode").value),
       danmaku: $("#setDanmaku").checked,
       danmakuSpeed: Number($("#setDanmakuSpeed").value),
     };
     Prefs.setJSON("mw/defaults", defaults);
     Prefs.set("mw/volume", defaults.volume);
     Prefs.set("mw/speed", defaults.speed);
-    Prefs.set("mw/mode", defaults.mode);
     Prefs.set("mw/danmaku", defaults.danmaku ? "1" : "0");
     Prefs.set("mw/danmakuSpeed", defaults.danmakuSpeed);
     UI.toast("播放器默认值已保存");
