@@ -13,6 +13,7 @@ _failed: set = set()
 _failed_lock = threading.Lock()
 _worker_started = False
 _worker_lock = threading.Lock()
+_WORKERS = 3
 
 
 def cache_path_for(path: str) -> Path:
@@ -66,8 +67,11 @@ def _start_worker() -> None:
         if _worker_started:
             return
         _worker_started = True
-        thread = threading.Thread(target=_worker_loop, name="thumbnailer", daemon=True)
-        thread.start()
+        for index in range(_WORKERS):
+            thread = threading.Thread(
+                target=_worker_loop, name=f"thumbnailer-{index}", daemon=True
+            )
+            thread.start()
 
 
 def _worker_loop() -> None:

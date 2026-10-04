@@ -4,7 +4,7 @@ import time
 import uuid
 
 from .. import db
-from . import scanner
+from . import scanner, thumbs
 from .scan_cancel import ScanCancelled
 
 _jobs = {}
@@ -87,8 +87,10 @@ def _run(job: dict):
             if len(batch) >= _BATCH:
                 if dir_id:
                     job["added"] += db.ensure_files_rel_batch(dir_id, batch)
+                    thumbs.request_batch([os.path.join(root, rel) for rel in batch])
                 else:
                     job["added"] += db.ensure_files_batch(batch)
+                    thumbs.request_batch(batch)
                 processed += len(batch)
                 job["processed"] = processed
                 batch = []
@@ -98,8 +100,10 @@ def _run(job: dict):
         if batch:
             if dir_id:
                 job["added"] += db.ensure_files_rel_batch(dir_id, batch)
+                thumbs.request_batch([os.path.join(root, rel) for rel in batch])
             else:
                 job["added"] += db.ensure_files_batch(batch)
+                thumbs.request_batch(batch)
             processed += len(batch)
             job["processed"] = processed
         if not dir_id:

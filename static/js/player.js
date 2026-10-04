@@ -36,6 +36,7 @@
     streamEncoderLabel: "",
     streamWatchdog: null,
     streamRetries: 0,
+    leftStream: null,
     playbackChecked: false,
     frameSeen: false,
     panelTab: "info",
@@ -321,6 +322,7 @@
       this.streamOffsetMs = 0;
       this.streamDurationMs = 0;
       this.streamRetries = 0;
+      this.leftStream = null;
       this.pendingSeekMs = null;
       this.markers = [];
       this.renderMarkers();
@@ -403,12 +405,12 @@
       );
     },
 
-    async startTranscodeStream(path) {
+    async startTranscodeStream(path, explicitStartMs, restoring) {
       if (this.paths[this.index] !== path) return;
       const video = this.el.video;
       const posMs = Math.round((video.currentTime || 0) * 1000);
       const resumeMs = this.pendingResume > 0 ? this.pendingResume : 0;
-      const startMs = posMs > 1000 ? posMs : resumeMs;
+      const startMs = explicitStartMs > 0 ? Math.round(explicitStartMs) : posMs > 1000 ? posMs : resumeMs;
       const record = this.currentDetail && this.currentDetail.record;
       this.streamMode = true;
       this.playbackChecked = true;
@@ -421,7 +423,7 @@
       video.src = this.transcodeStreamUrl(path, this.streamOffsetMs);
       video.play().catch(() => {});
       this.updateProgress();
-      this.showOsd("已切换实时转码播放（不占用磁盘）");
+      this.showOsd(restoring ? "已恢复实时转码播放" : "已切换实时转码播放（不占用磁盘）");
       this.armStreamWatchdog(path);
       if (!this.streamDurationMs) {
         try {
@@ -656,10 +658,23 @@
       this.stopArrowHold();
       this.hidePreview();
       this.saveProgress();
+      this.leftStream = this.streamMode
+        ? { path: this.paths[this.index], positionMs: Math.round(this.videoPositionMs()) }
+        : null;
       this.stopStream();
       this.closePopovers();
       this.el.video.pause();
       if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    },
+
+    resumeOnEnter() {
+      const left = this.leftStream;
+      this.leftStream = null;
+      if (!left || !left.path) return;
+      if (this.paths[this.index] !== left.path) return;
+      if (this.streamMode) return;
+      if (!this.el.video.paused) return;
+      this.startTranscodeStream(left.path, left.positionMs, true);
     },
 
     close() {

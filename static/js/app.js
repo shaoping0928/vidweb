@@ -341,7 +341,10 @@
     if (name === "tags") renderTagManagePage();
     if (name === "tasks") renderTasksPage();
     if (name === "settings") loadSettings();
-    if (name === "player") setDetailVisible(false);
+    if (name === "player") {
+      setDetailVisible(false);
+      if (window.Player && window.Player.resumeOnEnter) window.Player.resumeOnEnter();
+    }
     if (name === "lib") loadCollections();
   }
 
@@ -574,7 +577,7 @@
     };
     img.onload = () => container.classList.add("has-thumb");
     img.onerror = () => {
-      if (!hasThumb && state.config.ffmpeg && tries++ < 15) {
+      if (container.isConnected && !hasThumb && state.config.ffmpeg && tries++ < 90) {
         setTimeout(attempt, 2000);
       }
     };
