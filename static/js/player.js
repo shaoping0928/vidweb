@@ -30,7 +30,7 @@
       if (this.initialized) return;
       this.initialized = true;
       const ids = [
-        "playerOverlay", "video", "subtitleOverlay", "playerOsd", "playerHeader", "playerTitle",
+        "playerPage", "video", "subtitleOverlay", "playerOsd", "playerHeader", "playerTitle",
         "playerStage", "playerMain", "playerBody", "playerPanel", "playerPlaylistView", "playerBack",
         "progressTrack", "progressFill", "progressHandle", "progressMarkers", "progressTip",
         "timeNow", "timeTotal", "btnPrev", "btnPlay", "btnNext", "btnMode", "btnList", "btnAspect",
@@ -178,7 +178,7 @@
         return;
       }
       this.paths = files.slice();
-      this.el.playerOverlay.classList.remove("hidden");
+      if (window.APP && window.APP.setTab) window.APP.setTab("player");
       this.renderPlaylistPanel();
       await this.playIndex(index || 0);
     },
@@ -279,7 +279,7 @@
     close() {
       this.saveProgress();
       this.el.video.pause();
-      this.el.playerOverlay.classList.add("hidden");
+      if (window.APP && window.APP.setTab) window.APP.setTab("lib");
       if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
       if (window.APP && window.APP.onPlayerClosed) window.APP.onPlayerClosed();
     },
@@ -581,7 +581,7 @@
 
     danmakuStep() {
       if (!this.danmakuOn) return;
-      if (this.el.playerOverlay.classList.contains("hidden")) return;
+      if (!this.el.playerPage.classList.contains("active")) return;
       const t = this.el.video.currentTime * 1000;
       const last = this.lastDanmakuTime;
       if (last < 0) {
@@ -735,7 +735,7 @@
     },
 
     onKey(e) {
-      if (this.el.playerOverlay.classList.contains("hidden")) return;
+      if (!this.el.playerPage.classList.contains("active")) return;
       const target = e.target;
       if (
         target &&

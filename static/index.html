@@ -15,6 +15,8 @@
       <button class="tab" data-tab="lib">视频库</button>
       <button class="tab" data-tab="recent">最近播放</button>
       <button class="tab" data-tab="search">搜索</button>
+      <button class="tab" data-tab="tags">标签</button>
+      <button class="tab" data-tab="player">播放</button>
       <button class="tab" data-tab="settings">设置</button>
     </nav>
     <div class="top-actions">
@@ -64,18 +66,6 @@
     </section>
 
     <section id="page-lib" class="page">
-      <div class="toolbar">
-        <button id="plScanDir">扫描目录入库</button>
-        <button id="plImport">导入 m3u</button>
-        <button id="plExport">导出 m3u</button>
-        <button id="plThumb">生成缩略图</button>
-        <button id="plClean">移除失效项</button>
-        <button id="plClear">清空</button>
-        <span class="sep"></span>
-        <span class="label" id="plSummary"></span>
-        <span class="spacer"></span>
-        <button id="tagManage">标签管理</button>
-      </div>
       <div class="lib-layout">
         <aside class="lib-filters">
           <div class="filter-group">
@@ -140,6 +130,16 @@
         <span id="searchInfo" class="label"></span>
       </div>
       <ul id="searchList" class="list media-list grow"></ul>
+    </section>
+
+    <section id="page-tags" class="page">
+      <div class="toolbar">
+        <input id="tagNewName" placeholder="新标签名称">
+        <button id="tagCreate" class="primary">新建标签</button>
+        <span class="spacer"></span>
+        <span class="label" id="tagSummary"></span>
+      </div>
+      <ul id="tagManageList" class="list grow"></ul>
     </section>
 
     <section id="page-settings" class="page">
@@ -236,7 +236,7 @@
   <footer id="statusbar"><span id="statusText"></span></footer>
 </div>
 
-<div id="playerOverlay" class="hidden">
+<section id="page-player" class="page">
   <div id="playerHeader">
     <button id="playerBack">返回媒体库</button>
     <span id="playerTitle"></span>
@@ -293,7 +293,9 @@
         <button class="ptab-btn" data-ptab="playlist">播放列表</button>
         <button class="ptab-btn" data-ptab="comments">评论</button>
       </div>
-      <div id="ptab-info" class="ptab active"></div>
+      <div id="ptab-info" class="ptab active">
+        <p class="settings-hint">未开始播放。到「视频库」或「路径库」双击视频即可开始。</p>
+      </div>
       <div id="ptab-playlist" class="ptab">
         <ul id="playerPlaylistView" class="list"></ul>
       </div>
@@ -305,7 +307,7 @@
       </div>
     </aside>
   </div>
-</div>
+</section>
 
 <input type="file" id="subtitleFileInput" accept=".srt,.ass,.ssa,.vtt" class="hidden">
 <div id="modalRoot"></div>

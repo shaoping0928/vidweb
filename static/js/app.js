@@ -87,7 +87,9 @@
     $$("#tabs .tab").forEach((btn) => btn.classList.toggle("active", btn.dataset.tab === name));
     $$(".page").forEach((page) => page.classList.toggle("active", page.id === "page-" + name));
     if (name === "recent") refreshRecent();
+    if (name === "tags") renderTagManagePage();
     if (name === "settings") loadSettings();
+    if (name === "player") $("#detailPanel").classList.add("hidden");
   }
 
   /* ------------------------------------------------------------ UI */
@@ -597,7 +599,6 @@
       state.visiblePaths = [];
       state.playlistInfo = {};
       renderPlaylist();
-      updateLibSummary();
       return;
     }
     try {
@@ -608,7 +609,6 @@
       });
       state.visiblePaths = applyLibFilters(state.playlist, state.playlistInfo);
       renderPlaylist();
-      updateLibSummary();
     } catch (e) {
       UI.toast("播放列表刷新失败: " + e.message);
     }
@@ -677,12 +677,6 @@
       list.sort((a, b) => metric(b) - metric(a));
     }
     return list;
-  }
-
-  function updateLibSummary() {
-    $("#plSummary").textContent = state.playlist.length
-      ? "共 " + state.playlist.length + " 个 · 显示 " + state.visiblePaths.length + " 个"
-      : "播放列表为空";
   }
 
   function renderPlaylist() {
@@ -891,103 +885,109 @@
     });
   }
 
-  async function manageTags() {
-    const body = document.createElement("div");
-    const list = document.createElement("div");
-    list.className = "check-list";
-    list.style.minHeight = "220px";
-    body.appendChild(list);
-    let selectedId = null;
-    const load = async () => {
-      const data = await API.get("/api/tags");
-      list.innerHTML = "";
-      for (const tag of data.items) {
-        const row = document.createElement("div");
-        row.className = "check-row";
-        row.dataset.id = tag.id;
-        const dot = document.createElement("span");
-        dot.className = "dot";
-        dot.style.background = tag.color || "#5c636e";
-        const name = document.createElement("span");
-        name.textContent = tag.name;
-        const count = document.createElement("span");
-        count.className = "count";
-        count.textContent = tag.file_count + " 个文件";
-        row.append(dot, name, count);
-        row.addEventListener("click", () => {
-          selectedId = tag.id;
-          $$(".check-row", list).forEach((r) => r.classList.toggle("selected", r === row));
-        });
-        list.appendChild(row);
-      }
-    };
-    await load();
+  async function renderTagManagePage() {
+    let data;
+    try {
+      data = await API.get("/api/tags");
+    } catch (e) {
+      UI.toast(e.message);
+      return;
+    }
+    state.tags = data.items;
+    const list = $("#tagManageList");
+    list.innerHTML = "";
+    $("#tagSummary").textContent = data.items.length
+      ? "共 " + data.items.length + " 个标签"
+      : "暂无标签";
+    if (!data.items.length) {
+      const empty = document.createElement("li");
+      empty.className = "label";
+      empty.style.padding = "12px";
+      empty.textContent = "还没有标签：可在上方新建，或在文件右键「编辑标签」中创建。";
+      list.appendChild(empty);
+      return;
+    }
     const afterChange = async () => {
-      await load();
+      await renderTagManagePage();
       await refreshTagFilter();
       await refreshPlaylistView();
     };
-    UI.openModal({
-      title: "标签管理",
-      body,
-      width: 420,
-      footer: [
-        {
-          label: "重命名",
-          keepOpen: true,
-          onClick: async () => {
-            if (!selectedId) return;
-            const name = await UI.prompt("新名称");
-            if (!name) return;
-            try {
-              await API.put("/api/tags/" + selectedId, { name });
-              await afterChange();
-            } catch (e) {
-              UI.alert(e.message);
-            }
-          },
-        },
-        {
-          label: "颜色",
-          keepOpen: true,
-          onClick: () => {
-            if (!selectedId) return;
-            const input = document.createElement("input");
-            input.type = "color";
-            input.value = "#3d8bfd";
-            input.style.position = "fixed";
-            input.style.left = "-100px";
-            document.body.appendChild(input);
-            input.addEventListener("input", async () => {
-              try {
-                await API.put("/api/tags/" + selectedId, { color: input.value });
-                await afterChange();
-              } catch (e) {
-                UI.alert(e.message);
-              }
-            });
-            input.addEventListener("change", () => input.remove());
-            input.click();
-          },
-        },
-        {
-          label: "删除",
-          keepOpen: true,
-          onClick: async () => {
-            if (!selectedId) return;
-            if (!(await UI.confirm("确定删除该标签吗？所有文件上的该标签都会被移除。"))) return;
-            try {
-              await API.del("/api/tags/" + selectedId);
-              selectedId = null;
-              await afterChange();
-            } catch (e) {
-              UI.alert(e.message);
-            }
-          },
-        },
-        { label: "关闭", primary: true },
-      ],
-    });
+    for (const tag of data.items) {
+      const li = document.createElement("li");
+      li.className = "tag-row";
+      const dot = document.createElement("span");
+      dot.className = "dot";
+      dot.style.background = tag.color || "#5c636e";
+      const name = document.createElement("span");
+      name.className = "tag-name";
+      name.textContent = tag.name;
+      const count = document.createElement("span");
+      count.className = "tag-count";
+      count.textContent = tag.file_count + " 个文件";
+      const actions = document.createElement("span");
+      actions.className = "tag-actions";
+      const renameBtn = document.createElement("button");
+      renameBtn.textContent = "重命名";
+      renameBtn.addEventListener("click", async () => {
+        const value = await UI.prompt("新名称", tag.name);
+        if (!value || !value.trim()) return;
+        try {
+          await API.put("/api/tags/" + tag.id, { name: value.trim() });
+          await afterChange();
+        } catch (e) {
+          UI.alert(e.message);
+        }
+      });
+      const colorBtn = document.createElement("button");
+      colorBtn.textContent = "颜色";
+      colorBtn.addEventListener("click", () => {
+        const input = document.createElement("input");
+        input.type = "color";
+        input.value = tag.color || "#3d8bfd";
+        input.style.position = "fixed";
+        input.style.left = "-100px";
+        document.body.appendChild(input);
+        input.addEventListener("input", async () => {
+          try {
+            await API.put("/api/tags/" + tag.id, { color: input.value });
+            await afterChange();
+          } catch (e) {
+            UI.alert(e.message);
+          }
+        });
+        input.addEventListener("change", () => input.remove());
+        input.click();
+      });
+      const delBtn = document.createElement("button");
+      delBtn.textContent = "删除";
+      delBtn.addEventListener("click", async () => {
+        if (!(await UI.confirm("确定删除标签「" + tag.name + "」吗？所有文件上的该标签都会被移除。"))) return;
+        try {
+          await API.del("/api/tags/" + tag.id);
+          await afterChange();
+        } catch (e) {
+          UI.alert(e.message);
+        }
+      });
+      actions.append(renameBtn, colorBtn, delBtn);
+      li.append(dot, name, count, actions);
+      list.appendChild(li);
+    }
+  }
+
+  async function createTag() {
+    const input = $("#tagNewName");
+    const name = input.value.trim();
+    if (!name) return;
+    try {
+      await API.post("/api/tags", { name: name });
+      input.value = "";
+      await renderTagManagePage();
+      await refreshTagFilter();
+      UI.toast("已新建标签: " + name);
+    } catch (e) {
+      UI.alert(e.message);
+    }
   }
 
   /* ------------------------------------------------------------ detail */
@@ -1570,26 +1570,6 @@
       ]);
     });
 
-    $("#plScanDir").addEventListener("click", async () => {
-      const selected = state.selectedPaths.find((p) => state.dirs.some((d) => d.path === p));
-      if (selected) return scanDir(selected);
-      const path = await UI.prompt("扫描目录（绝对路径）", state.path || "");
-      if (path) scanDir(path);
-    });
-    $("#plImport").addEventListener("click", importM3u);
-    $("#plExport").addEventListener("click", exportM3u);
-    $("#plThumb").addEventListener("click", () => {
-      const selected = state.selectedPaths.filter((p) => state.playlist.includes(p));
-      requestThumbs(selected.length ? selected : state.visiblePaths);
-    });
-    $("#plClean").addEventListener("click", cleanPlaylist);
-    $("#plClear").addEventListener("click", async () => {
-      if (!state.playlist.length) return;
-      if (!(await UI.confirm("确定清空播放列表吗？"))) return;
-      state.playlist = [];
-      savePlaylistLocal();
-      await refreshPlaylistView();
-    });
     let libFilterTimer = null;
     $("#plSearch").addEventListener("input", () => {
       clearTimeout(libFilterTimer);
@@ -1639,7 +1619,10 @@
       renderLibTagList();
       refreshPlaylistView();
     });
-    $("#tagManage").addEventListener("click", manageTags);
+    $("#tagCreate").addEventListener("click", createTag);
+    $("#tagNewName").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") createTag();
+    });
 
     $("#recentRefresh").addEventListener("click", refreshRecent);
     $("#recentClear").addEventListener("click", async () => {
@@ -1709,6 +1692,7 @@
     get visiblePaths() {
       return state.visiblePaths;
     },
+    setTab,
     onPlayerClosed() {
       refreshPlaylistView();
       if (state.tab === "recent") refreshRecent();
