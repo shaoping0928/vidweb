@@ -32,6 +32,7 @@
     previewTimer: null,
     previewBucket: -1,
     ffmpegOn: false,
+    panelTab: "info",
     el: {},
 
     async init() {
@@ -49,6 +50,7 @@
         "playerStage", "playerMain", "playerBody", "playerPanel", "playerPlaylistView", "playerBack",
         "progressTrack", "progressFill", "progressHandle", "progressMarkers", "progressTip",
         "progressWrap", "progressPreview", "progressPreviewImg", "progressPreviewTime",
+        "playerShotList", "btnShotPanel",
         "timeNow", "timeTotal", "btnPrev", "btnPlay", "btnNext", "btnMode", "btnList", "btnAspect",
         "btnSnap", "btnMute", "volume", "volText", "speed", "speedText", "btnFullscreen",
         "btnLoadSub", "btnToggleSub", "btnAddComment", "btnAddCommentPanel", "btnPanelToggle",
@@ -100,6 +102,7 @@
       el.btnLoadSub.addEventListener("click", () => el.subtitleFileInput.click());
       el.btnAddComment.addEventListener("click", () => this.addComment());
       el.btnAddCommentPanel.addEventListener("click", () => this.addComment());
+      el.btnShotPanel.addEventListener("click", () => this.snapshot());
       Array.from(document.querySelectorAll(".ptab-btn")).forEach((btn) => {
         btn.addEventListener("click", () => this.switchPanelTab(btn.dataset.ptab));
       });
@@ -501,6 +504,7 @@
     },
 
     switchPanelTab(name) {
+      this.panelTab = name;
       Array.from(document.querySelectorAll(".ptab-btn")).forEach((btn) => {
         btn.classList.toggle("active", btn.dataset.ptab === name);
       });
@@ -512,6 +516,91 @@
       if (name === "recent" && window.APP && window.APP.refreshRecent) {
         window.APP.refreshRecent();
       }
+      if (name === "shots") this.loadScreenshots();
+    },
+
+    async loadScreenshots() {
+      const list = this.el.playerShotList;
+      if (!list) return;
+      list.innerHTML = "";
+      const path = this.paths[this.index] || "";
+      let data;
+      try {
+        data = await API.get("/api/screenshots", { path: path });
+      } catch (e) {
+        list.appendChild(makeShotHint("截图加载失败：" + e.message));
+        return;
+      }
+      const items = data.items || [];
+      if (!items.length) {
+        list.appendChild(makeShotHint("暂无截图，按 C 或点击上方按钮截取"));
+        return;
+      }
+      for (const item of items) {
+        const box = document.createElement("div");
+        box.className = "shot-item";
+        const img = document.createElement("img");
+        img.loading = "lazy";
+        img.src = "/api/screenshots/" + item.id + "/image";
+        img.alt = "";
+        const time = document.createElement("span");
+        time.className = "shot-time";
+        time.textContent = Fmt.time(item.position_ms || 0);
+        box.append(img, time);
+        box.addEventListener("click", () => this.showScreenshot(item));
+        list.appendChild(box);
+      }
+    },
+
+    showScreenshot(item) {
+      const wrap = document.createElement("div");
+      const img = document.createElement("img");
+      img.src = "/api/screenshots/" + item.id + "/image";
+      img.style.width = "100%";
+      img.style.borderRadius = "6px";
+      img.style.background = "#000";
+      const info = document.createElement("div");
+      info.className = "settings-hint";
+      info.style.marginTop = "8px";
+      const videoName = item.video_path
+        ? item.video_path.split(/[\\/]/).pop() + " · "
+        : "";
+      info.textContent =
+        videoName + Fmt.time(item.position_ms || 0) + " · " + Fmt.dateTime(item.created_at);
+      wrap.append(img, info);
+      let modal = null;
+      modal = UI.openModal({
+        title: "截图",
+        body: wrap,
+        width: 720,
+        footer: [
+          {
+            label: "下载",
+            keepOpen: true,
+            onClick: () => {
+              const link = document.createElement("a");
+              link.href = "/api/screenshots/" + item.id + "/image";
+              link.download = "screenshot_" + item.id + ".png";
+              link.click();
+            },
+          },
+          {
+            label: "删除",
+            keepOpen: true,
+            onClick: async () => {
+              if (!(await UI.confirm("确定删除这张截图吗？"))) return;
+              try {
+                await API.del("/api/screenshots/" + item.id);
+                UI.close(modal.overlay);
+                this.loadScreenshots();
+              } catch (error) {
+                UI.alert(error.message);
+              }
+            },
+          },
+          { label: "关闭", primary: true },
+        ],
+      });
     },
 
     renderInfoPanel(detail) {
@@ -993,7 +1082,7 @@
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
       canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
-      canvas.toBlob((blob) => {
+      canvas.toBlob(async (blob) => {
         if (!blob) {
           this.showOsd("截图失败");
           return;
@@ -1003,12 +1092,18 @@
           .pop()
           .replace(/\.[^.]+$/, "");
         const name = base + "_" + Fmt.timestamp() + ".png";
-        const link = document.createElement("a");
-        link.href = URL.createObjectURL(blob);
-        link.download = name;
-        link.click();
-        setTimeout(() => URL.revokeObjectURL(link.href), 10000);
-        this.showOsd("截图已保存: " + name);
+        try {
+          const form = new FormData();
+          form.append("file", blob, name);
+          form.append("path", this.paths[this.index] || "");
+          form.append("position_ms", Math.round(this.el.video.currentTime * 1000));
+          const res = await fetch("/api/screenshots", { method: "POST", body: form });
+          if (!res.ok) throw new Error("upload failed");
+          this.showOsd("截图已保存: " + name);
+          if (this.panelTab === "shots") this.loadScreenshots();
+        } catch (error) {
+          this.showOsd("截图保存失败");
+        }
       }, "image/png");
     },
 
@@ -1123,6 +1218,13 @@
       this.switchPanelTab("comments");
     },
   };
+
+  function makeShotHint(text) {
+    const box = document.createElement("div");
+    box.className = "shot-empty";
+    box.textContent = text;
+    return box;
+  }
 
   window.Player = Player;
   document.addEventListener("DOMContentLoaded", () => Player.init());

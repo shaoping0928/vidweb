@@ -588,6 +588,10 @@ input[type="range"] {
   display: block;
 }
 
+.thumb.has-thumb .thumb-ph {
+  display: none;
+}
+
 .thumb .thumb-ph {
   position: absolute;
   inset: 0;
@@ -1419,6 +1423,51 @@ input[type="range"] {
 .comment-actions button {
   padding: 1px 6px;
   font-size: 11px;
+}
+
+.shot-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.shot-item {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  cursor: pointer;
+  background: #000;
+}
+
+.shot-item:hover {
+  border-color: var(--accent);
+}
+
+.shot-item img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+}
+
+.shot-time {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  background: rgba(0, 0, 0, 0.72);
+  color: #dfe3e8;
+  font-size: 11px;
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+.shot-empty {
+  grid-column: 1 / -1;
+  color: var(--dim);
+  text-align: center;
+  padding: 24px 8px;
+  font-size: 12px;
 }
 
 #controls {

@@ -39,6 +39,7 @@ def init_db() -> None:
     config.DATA_DIR.mkdir(parents=True, exist_ok=True)
     config.THUMB_DIR.mkdir(parents=True, exist_ok=True)
     config.PLAYLIST_DIR.mkdir(parents=True, exist_ok=True)
+    config.SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
     schema_file = Path(__file__).resolve().parent / "schema.sql"
     conn = _connect()
     try:
@@ -152,6 +153,22 @@ def init_db() -> None:
                     "UPDATE app_state SET value = '[]' WHERE key = 'playlist'"
                 )
             conn.execute("PRAGMA user_version = 6")
+            version = 6
+        if version < 7:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS screenshots ("
+                "  id INTEGER PRIMARY KEY,"
+                "  file_id INTEGER,"
+                "  video_path TEXT,"
+                "  position_ms INTEGER DEFAULT 0,"
+                "  filename TEXT,"
+                "  width INTEGER DEFAULT 0,"
+                "  height INTEGER DEFAULT 0,"
+                "  size INTEGER DEFAULT 0,"
+                "  created_at INTEGER DEFAULT 0"
+                ")"
+            )
+            conn.execute("PRAGMA user_version = 7")
         conn.commit()
     finally:
         conn.close()
@@ -909,3 +926,60 @@ def playlist_clear() -> None:
 def playlist_set_paths(paths: list) -> None:
     playlist_clear()
     playlist_add(paths)
+
+
+# ---------------------------------------------------------------- screenshots
+
+def add_screenshot(
+    file_id, video_path, position_ms, filename, width, height, size
+) -> int:
+    with connection() as conn:
+        cur = conn.execute(
+            "INSERT INTO screenshots(file_id, video_path, position_ms, filename,"
+            " width, height, size, created_at) VALUES(?,?,?,?,?,?,?,?)",
+            (
+                file_id if file_id and file_id > 0 else None,
+                str(video_path or ""),
+                max(0, int(position_ms or 0)),
+                str(filename),
+                int(width or 0),
+                int(height or 0),
+                int(size or 0),
+                _now(),
+            ),
+        )
+        return cur.lastrowid
+
+
+def list_screenshots(video_path: str = "", limit: int = 200) -> list:
+    with connection() as conn:
+        if video_path:
+            rows = conn.execute(
+                "SELECT * FROM screenshots WHERE video_path = ?"
+                " ORDER BY id DESC LIMIT ?",
+                (str(video_path), limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM screenshots ORDER BY id DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def screenshot_by_id(screenshot_id: int):
+    with connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM screenshots WHERE id = ?", (screenshot_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def remove_screenshot(screenshot_id: int):
+    with connection() as conn:
+        row = conn.execute(
+            "SELECT filename FROM screenshots WHERE id = ?", (screenshot_id,)
+        ).fetchone()
+        if not row:
+            return None
+        conn.execute("DELETE FROM screenshots WHERE id = ?", (screenshot_id,))
+        return row["filename"]

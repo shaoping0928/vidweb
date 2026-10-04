@@ -9,6 +9,7 @@ DATA_DIR = BASE_DIR / "data"
 STATIC_DIR = BASE_DIR / "static"
 THUMB_DIR = DATA_DIR / "thumbs"
 PLAYLIST_DIR = DATA_DIR / "playlists"
+SCREENSHOT_DIR = DATA_DIR / "screenshots"
 CONFIG_FILE = BASE_DIR / "config.json"
 
 APP_NAME = "Media Web"
