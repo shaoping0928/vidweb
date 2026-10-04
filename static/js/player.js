@@ -24,6 +24,7 @@
     danmakuRaf: null,
     lastDanmakuTime: -1,
     laneFree: [],
+    panelPage: 1,
     el: {},
 
     init() {
@@ -37,6 +38,7 @@
         "btnSnap", "btnMute", "volume", "volText", "speed", "speedText", "btnFullscreen",
         "btnLoadSub", "btnToggleSub", "btnAddComment", "btnAddCommentPanel", "btnPanelToggle",
         "subtitleFileInput", "danmakuLayer", "btnDanmaku", "playerCommentList",
+        "playerPlaylistPager",
       ];
       ids.forEach((id) => {
         this.el[id] = document.getElementById(id);
@@ -179,6 +181,7 @@
         return;
       }
       this.paths = files.slice();
+      this.panelPage = 1;
       if (window.APP && window.APP.setTab) window.APP.setTab("player");
       this.renderPlaylistPanel();
       await this.playIndex(index || 0);
@@ -324,19 +327,81 @@
         this.index + 1 + "/" + this.paths.length + " - " + path.split(/[\\/]/).pop();
     },
 
+    playlistPageSize() {
+      const value = parseInt(localStorage.getItem("mw/pageSize") || "30", 10);
+      return [10, 20, 30, 50, 100].includes(value) ? value : 30;
+    },
+
     renderPlaylistPanel() {
       const list = this.el.playerPlaylistView;
+      if (!list) return;
       list.innerHTML = "";
-      this.paths.forEach((path, index) => {
+      const size = this.playlistPageSize();
+      const totalPages = Math.max(1, Math.ceil(this.paths.length / size));
+      this.panelPage = Math.min(Math.max(1, this.panelPage || 1), totalPages);
+      const start = (this.panelPage - 1) * size;
+      this.paths.slice(start, start + size).forEach((path, offset) => {
+        const index = start + offset;
         const li = document.createElement("li");
         li.textContent = index + 1 + ". " + path.split(/[\\/]/).pop();
         li.title = path;
         li.dataset.index = index;
         list.appendChild(li);
       });
+      this.renderPlaylistPager(size, totalPages);
+    },
+
+    renderPlaylistPager(size, totalPages) {
+      const box = this.el.playerPlaylistPager;
+      if (!box) return;
+      box.innerHTML = "";
+      if (!this.paths.length) return;
+      const info = document.createElement("span");
+      info.className = "pager-info";
+      info.textContent = "共 " + this.paths.length + " 条";
+      const prev = document.createElement("button");
+      prev.textContent = "上一页";
+      prev.disabled = this.panelPage <= 1;
+      prev.addEventListener("click", () => {
+        this.panelPage -= 1;
+        this.renderPlaylistPanel();
+        this.updatePlaylistSelection();
+      });
+      const label = document.createElement("span");
+      label.textContent = this.panelPage + " / " + totalPages;
+      const next = document.createElement("button");
+      next.textContent = "下一页";
+      next.disabled = this.panelPage >= totalPages;
+      next.addEventListener("click", () => {
+        this.panelPage += 1;
+        this.renderPlaylistPanel();
+        this.updatePlaylistSelection();
+      });
+      const sizeSelect = document.createElement("select");
+      for (const value of [10, 20, 30, 50, 100]) {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = value + " / 页";
+        if (value === size) option.selected = true;
+        sizeSelect.appendChild(option);
+      }
+      sizeSelect.addEventListener("change", () => {
+        localStorage.setItem("mw/pageSize", String(sizeSelect.value));
+        this.panelPage = Math.floor(this.index / this.playlistPageSize()) + 1;
+        this.renderPlaylistPanel();
+        this.updatePlaylistSelection();
+        if (window.APP && window.APP.refreshPlaylistView) window.APP.refreshPlaylistView();
+      });
+      box.append(info, prev, label, next, sizeSelect);
     },
 
     updatePlaylistSelection() {
+      const size = this.playlistPageSize();
+      const targetPage = Math.floor(Math.max(0, this.index) / size) + 1;
+      if (targetPage !== this.panelPage) {
+        this.panelPage = targetPage;
+        this.renderPlaylistPanel();
+      }
       Array.from(this.el.playerPlaylistView.querySelectorAll("li")).forEach((li) => {
         li.classList.toggle("selected", parseInt(li.dataset.index, 10) === this.index);
       });
@@ -357,6 +422,9 @@
       });
       if (name === "info" && this.currentDetail) this.renderInfoPanel(this.currentDetail);
       if (name === "comments") this.refreshCommentsForCurrent();
+      if (name === "recent" && window.APP && window.APP.refreshRecent) {
+        window.APP.refreshRecent();
+      }
     },
 
     renderInfoPanel(detail) {

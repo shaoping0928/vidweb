@@ -29,7 +29,130 @@
     settingRoots: [],
     roots: [],
     parent: "",
+    pages: { fileList: 1, playlist: 1, recent: 1, search: 1 },
   };
+
+  const PAGE_SIZES = [10, 20, 30, 50, 100];
+
+  function pageSize() {
+    const value = parseInt(localStorage.getItem("mw/pageSize") || "30", 10);
+    return PAGE_SIZES.includes(value) ? value : 30;
+  }
+
+  function setPageSize(value) {
+    localStorage.setItem("mw/pageSize", String(value));
+  }
+
+  function paginate(total, page, size) {
+    const totalPages = Math.max(1, Math.ceil(total / size));
+    const current = Math.min(Math.max(1, page || 1), totalPages);
+    return { start: (current - 1) * size, page: current, totalPages };
+  }
+
+  function renderPager(selector, key, total, rerender) {
+    const box = $(selector);
+    if (!box) return;
+    box.innerHTML = "";
+    if (!total) return;
+    const size = pageSize();
+    const { page, totalPages } = paginate(total, state.pages[key], size);
+    state.pages[key] = page;
+    const info = document.createElement("span");
+    info.className = "pager-info";
+    info.textContent = "共 " + total + " 条";
+    const prev = document.createElement("button");
+    prev.textContent = "上一页";
+    prev.disabled = page <= 1;
+    prev.addEventListener("click", () => {
+      state.pages[key] = page - 1;
+      rerender();
+    });
+    const label = document.createElement("span");
+    label.textContent = page + " / " + totalPages;
+    const next = document.createElement("button");
+    next.textContent = "下一页";
+    next.disabled = page >= totalPages;
+    next.addEventListener("click", () => {
+      state.pages[key] = page + 1;
+      rerender();
+    });
+    const sizeSelect = document.createElement("select");
+    for (const value of PAGE_SIZES) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = value + " / 页";
+      if (value === size) option.selected = true;
+      sizeSelect.appendChild(option);
+    }
+    sizeSelect.addEventListener("change", () => {
+      setPageSize(Number(sizeSelect.value));
+      state.pages.fileList = 1;
+      state.pages.playlist = 1;
+      state.pages.recent = 1;
+      state.pages.search = 1;
+      rerenderAllLists();
+    });
+    box.append(info, prev, label, next, sizeSelect);
+  }
+
+  function rerenderAllLists() {
+    renderFileList();
+    renderPlaylist();
+    renderRecentList();
+    renderSearchList();
+    if (window.Player && window.Player.renderPlaylistPanel) window.Player.renderPlaylistPanel();
+  }
+
+  function initSplitters() {
+    $$(".splitter").forEach((splitter) => {
+      const target = document.getElementById(splitter.dataset.resizeTarget);
+      if (!target) return;
+      const min = Number(splitter.dataset.min || 140);
+      const max = Number(splitter.dataset.max || 640);
+      const invert = splitter.dataset.invert === "true";
+      const key = "mw/split/" + splitter.dataset.resizeTarget;
+      const saved = parseInt(localStorage.getItem(key) || "0", 10);
+      if (saved >= min && saved <= max) target.style.width = saved + "px";
+      let dragging = false;
+      let startX = 0;
+      let startWidth = 0;
+      splitter.addEventListener("pointerdown", (e) => {
+        dragging = true;
+        startX = e.clientX;
+        startWidth = target.getBoundingClientRect().width;
+        splitter.classList.add("dragging");
+        try {
+          splitter.setPointerCapture(e.pointerId);
+        } catch (err) {}
+        e.preventDefault();
+      });
+      splitter.addEventListener("pointermove", (e) => {
+        if (!dragging) return;
+        const delta = e.clientX - startX;
+        const width = Math.min(max, Math.max(min, startWidth + (invert ? -delta : delta)));
+        target.style.width = width + "px";
+        e.preventDefault();
+      });
+      const finish = (e) => {
+        if (!dragging) return;
+        dragging = false;
+        splitter.classList.remove("dragging");
+        try {
+          splitter.releasePointerCapture(e.pointerId);
+        } catch (err) {}
+        localStorage.setItem(key, String(Math.round(target.getBoundingClientRect().width)));
+        if (target.id === "playerPanel" && window.Player && window.Player.resetDanmaku) {
+          window.Player.resetDanmaku();
+        }
+      };
+      splitter.addEventListener("pointerup", finish);
+      splitter.addEventListener("pointercancel", finish);
+      splitter.addEventListener("dblclick", () => {
+        target.style.width = "";
+        localStorage.removeItem(key);
+      });
+    });
+  }
 
   function basename(path) {
     return String(path || "").split(/[\\/]/).pop() || "";
@@ -143,10 +266,9 @@
     state.tab = name;
     $$("#tabs .tab").forEach((btn) => btn.classList.toggle("active", btn.dataset.tab === name));
     $$(".page").forEach((page) => page.classList.toggle("active", page.id === "page-" + name));
-    if (name === "recent") refreshRecent();
     if (name === "tags") renderTagManagePage();
     if (name === "settings") loadSettings();
-    if (name === "player") $("#detailPanel").classList.add("hidden");
+    if (name === "player") setDetailVisible(false);
   }
 
   /* ------------------------------------------------------------ UI */
@@ -488,6 +610,7 @@
       state.path = data.path;
       state.parent = data.parent || "";
       state.entries = data.entries;
+      state.pages.fileList = 1;
       $("#pathInput").value = data.path;
       syncDriveSelect(data.path);
       updatePathUp();
@@ -501,7 +624,10 @@
   function renderFileList() {
     const list = $("#fileList");
     list.innerHTML = "";
-    for (const entry of state.entries) {
+    const size = pageSize();
+    const { start } = paginate(state.entries.length, state.pages.fileList, size);
+    state.pages.fileList = paginate(state.entries.length, state.pages.fileList, size).page;
+    for (const entry of state.entries.slice(start, start + size)) {
       const li = document.createElement("li");
       li.className = "entry" + (entry.isdir ? " dir" : entry.is_video ? " video" : "");
       li.dataset.path = entry.path;
@@ -519,6 +645,7 @@
       li.append(name, badge, meta);
       list.appendChild(li);
     }
+    renderPager("#fileListPager", "fileList", state.entries.length, renderFileList);
   }
 
   async function openVideosInDir(dirPath, startPath) {
@@ -749,7 +876,11 @@
   function renderPlaylist() {
     const list = $("#playlistView");
     list.innerHTML = "";
-    state.visiblePaths.forEach((path, index) => {
+    const size = pageSize();
+    const { start } = paginate(state.visiblePaths.length, state.pages.playlist, size);
+    state.pages.playlist = paginate(state.visiblePaths.length, state.pages.playlist, size).page;
+    state.visiblePaths.slice(start, start + size).forEach((path, offset) => {
+      const index = start + offset;
       const info = state.playlistInfo[path] || {};
       const tags = info.tags || [];
       let subtitle = tags.length ? "标签: " + tags.join(", ") : path;
@@ -766,6 +897,7 @@
       li.dataset.index = index;
       list.appendChild(li);
     });
+    renderPager("#playlistPager", "playlist", state.visiblePaths.length, renderPlaylist);
   }
 
   async function removeFromPlaylist(paths) {
@@ -1246,14 +1378,15 @@
     content.innerHTML = html;
   }
 
-  function toggleDetail() {
-    const panel = $("#detailPanel");
-    const show = panel.classList.contains("hidden");
-    panel.classList.toggle("hidden", !show);
-    if (!show) return;
-    const target =
-      state.selectedPaths[0] || state.visiblePaths[0] || state.entries.find((e) => !e.isdir)?.path || "";
-    showDetailsFor(target);
+  function setDetailVisible(show) {
+    $("#detailPanel").classList.toggle("hidden", !show);
+    const splitter = $("#detailSplitter");
+    if (splitter) splitter.classList.toggle("hidden", !show);
+  }
+
+  function showDetailsInPanel(path) {
+    setDetailVisible(true);
+    showDetailsFor(path);
   }
 
   /* ------------------------------------------------------------ recent */
@@ -1267,9 +1400,17 @@
       return;
     }
     state.recentItems = data.items;
+    state.pages.recent = 1;
+    renderRecentList();
+  }
+
+  function renderRecentList() {
     const list = $("#recentList");
     list.innerHTML = "";
-    for (const item of data.items) {
+    const size = pageSize();
+    const { start } = paginate(state.recentItems.length, state.pages.recent, size);
+    state.pages.recent = paginate(state.recentItems.length, state.pages.recent, size).page;
+    for (const item of state.recentItems.slice(start, start + size)) {
       let subtitle = "播放 " + item.play_count + " 次 · " + Fmt.relative(item.last_played_at);
       if (item.last_position_ms > 0) subtitle += " · 上次进度 " + Fmt.time(item.last_position_ms);
       list.appendChild(
@@ -1282,15 +1423,16 @@
         })
       );
     }
+    renderPager("#recentPager", "recent", state.recentItems.length, renderRecentList);
   }
 
   /* ------------------------------------------------------------ search */
 
   async function doSearch() {
     const keyword = $("#searchInput").value.trim();
-    const list = $("#searchList");
-    list.innerHTML = "";
     if (!keyword) {
+      state.searchItems = [];
+      renderSearchList();
       $("#searchInfo").textContent = "输入关键字搜索文件名、标签和评论";
       return;
     }
@@ -1302,7 +1444,18 @@
       return;
     }
     state.searchItems = data.items;
-    for (const item of data.items) {
+    state.pages.search = 1;
+    renderSearchList();
+    $("#searchInfo").textContent = "找到 " + data.items.length + " 个结果";
+  }
+
+  function renderSearchList() {
+    const list = $("#searchList");
+    list.innerHTML = "";
+    const size = pageSize();
+    const { start } = paginate(state.searchItems.length, state.pages.search, size);
+    state.pages.search = paginate(state.searchItems.length, state.pages.search, size).page;
+    for (const item of state.searchItems.slice(start, start + size)) {
       const li = makeMediaItem({
         path: item.path,
         name: item.name,
@@ -1313,7 +1466,7 @@
       li.title = item.path + "\n匹配: " + item.reason;
       list.appendChild(li);
     }
-    $("#searchInfo").textContent = "找到 " + data.items.length + " 个结果";
+    renderPager("#searchPager", "search", state.searchItems.length, renderSearchList);
   }
 
   /* ------------------------------------------------------------ m3u */
@@ -1413,6 +1566,13 @@
     $("#setMode").value = String(defaults.mode);
     $("#setDanmaku").checked = defaults.danmaku;
     $("#setDanmakuSpeed").value = String(defaults.danmakuSpeed);
+    $("#setPageSize").value = String(pageSize());
+    $("#aboutVersion").textContent = state.config.version || "";
+    $("#aboutFfmpeg").textContent = state.config.ffmpeg
+      ? state.config.ffmpeg_path || "已检测到"
+      : "未检测到（缩略图与媒体信息探测不可用）";
+    $("#aboutDataDir").textContent = state.config.data_dir || data.data_dir || "";
+    $("#aboutConfigFile").textContent = data.config_file || "";
     updatePlayerDefaultLabels();
   }
 
@@ -1538,14 +1698,8 @@
       btn.addEventListener("click", () => setTab(btn.dataset.tab));
     });
 
-    $("#btnDetail").addEventListener("click", toggleDetail);
-    $("#detailClose").addEventListener("click", () => $("#detailPanel").classList.add("hidden"));
-    $("#btnExploreDir").addEventListener("click", () => state.path && explore(state.path));
+    $("#detailClose").addEventListener("click", () => setDetailVisible(false));
     $("#btnAbout").addEventListener("click", showAbout);
-    $("#btnThumbBatch").addEventListener("click", () => {
-      const selected = state.selectedPaths.filter((p) => state.playlist.includes(p));
-      requestThumbs(selected.length ? selected : state.visiblePaths);
-    });
 
     $("#pathGo").addEventListener("click", () => browse($("#pathInput").value.trim()));
     $("#driveSelect").addEventListener("change", () => {
@@ -1633,7 +1787,7 @@
           enabled: selectedVideos.length > 0,
           onClick: () => editTags(selectedVideos),
         },
-        { label: "查看详情", onClick: () => showDetailsFor(path) },
+        { label: "查看详情", onClick: () => showDetailsInPanel(path) },
         { label: "生成缩略图", enabled: li.classList.contains("video"), onClick: () => requestThumbs([path]) },
         { label: "在资源管理器中显示", onClick: () => explore(path) },
         "-",
@@ -1684,7 +1838,7 @@
       showMenu(e.clientX, e.clientY, [
         { label: "播放", onClick: () => Player.open(state.visiblePaths, parseInt(li.dataset.index, 10)) },
         { label: "编辑标签...", enabled: selected.length > 0, onClick: () => editTags(selected) },
-        { label: "查看详情", onClick: () => showDetailsFor(path) },
+        { label: "查看详情", onClick: () => showDetailsInPanel(path) },
         { label: "生成缩略图", enabled: selected.length > 0, onClick: () => requestThumbs(selected) },
         { label: "从列表移除", enabled: selected.length > 0, onClick: () => removeFromPlaylist(selected) },
         { label: "清空列表", enabled: state.playlist.length > 0, onClick: async () => {
@@ -1730,7 +1884,7 @@
             Player.open(files, index);
           },
         },
-        { label: "查看详情", onClick: () => showDetailsFor(li.dataset.path) },
+        { label: "查看详情", onClick: () => showDetailsInPanel(li.dataset.path) },
         { label: "在资源管理器中显示", onClick: () => explore(li.dataset.path) },
       ]);
     });
@@ -1767,7 +1921,7 @@
           },
         },
         { label: "编辑标签...", onClick: () => editTags([path]) },
-        { label: "查看详情", onClick: () => showDetailsFor(path) },
+        { label: "查看详情", onClick: () => showDetailsInPanel(path) },
         { label: "生成缩略图", onClick: () => requestThumbs([path]) },
         { label: "在资源管理器中显示", onClick: () => explore(path) },
       ]);
@@ -1846,6 +2000,12 @@
     $("#setVolume").addEventListener("input", updatePlayerDefaultLabels);
     $("#setSpeed").addEventListener("input", updatePlayerDefaultLabels);
     $("#setPlayerSave").addEventListener("click", savePlayerDefaults);
+    $("#setPageSizeSave").addEventListener("click", () => {
+      setPageSize(Number($("#setPageSize").value));
+      state.pages = { fileList: 1, playlist: 1, recent: 1, search: 1 };
+      rerenderAllLists();
+      UI.toast("每页数量已设置为 " + pageSize());
+    });
     $("#setServerSave").addEventListener("click", saveServerSettings);
     $("#setFfmpegTest").addEventListener("click", () =>
       testTool("ffmpeg", "#setFfmpeg", $("#setToolStatus"))
@@ -1882,6 +2042,7 @@
   async function init() {
     await refreshConfig();
     bindEvents();
+    initSplitters();
     restoreLibFilterUI();
     await refreshTagFilter();
     await loadLibraryDirs();
@@ -1896,9 +2057,9 @@
       return state.visiblePaths;
     },
     setTab,
+    refreshRecent,
     onPlayerClosed() {
       refreshPlaylistView();
-      if (state.tab === "recent") refreshRecent();
     },
     refreshPlaylistView,
   };

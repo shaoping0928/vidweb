@@ -13,18 +13,11 @@
     <nav id="tabs">
       <button class="tab active" data-tab="path">路径库</button>
       <button class="tab" data-tab="lib">视频库</button>
-      <button class="tab" data-tab="recent">最近播放</button>
       <button class="tab" data-tab="search">搜索</button>
       <button class="tab" data-tab="tags">标签</button>
       <button class="tab" data-tab="player">播放</button>
       <button class="tab" data-tab="settings">设置</button>
     </nav>
-    <div class="top-actions">
-      <button id="btnThumbBatch" title="为选中项或全部生成缩略图">生成缩略图</button>
-      <button id="btnDetail">详情</button>
-      <button id="btnExploreDir">打开文件夹</button>
-      <button id="btnAbout">关于</button>
-    </div>
   </header>
 
   <div id="ffmpegBanner" class="banner hidden"></div>
@@ -50,7 +43,7 @@
         <button id="pathRefresh">刷新</button>
       </div>
       <div class="path-layout">
-        <aside class="side">
+        <aside class="side" id="pathSide">
           <div class="side-head">
             <span>路径库</span>
             <span class="side-actions">
@@ -61,13 +54,17 @@
           </div>
           <ul id="dirList" class="list"></ul>
         </aside>
-        <ul id="fileList" class="list grow"></ul>
+        <div class="splitter" data-resize-target="pathSide" data-min="160" data-max="560" title="拖动调整宽度，双击恢复默认"></div>
+        <div class="list-col">
+          <ul id="fileList" class="list"></ul>
+          <div class="pager" id="fileListPager"></div>
+        </div>
       </div>
     </section>
 
     <section id="page-lib" class="page">
       <div class="lib-layout">
-        <aside class="lib-filters">
+        <aside class="lib-filters" id="libFilters">
           <div class="filter-group">
             <div class="filter-title">文件名</div>
             <input id="plSearch" placeholder="输入关键字筛选">
@@ -111,16 +108,12 @@
           </div>
           <button id="plResetFilters">重置筛选</button>
         </aside>
-        <ul id="playlistView" class="list media-list grow"></ul>
+        <div class="splitter" data-resize-target="libFilters" data-min="170" data-max="480" title="拖动调整宽度，双击恢复默认"></div>
+        <div class="list-col">
+          <ul id="playlistView" class="list media-list"></ul>
+          <div class="pager" id="playlistPager"></div>
+        </div>
       </div>
-    </section>
-
-    <section id="page-recent" class="page">
-      <div class="toolbar">
-        <button id="recentRefresh">刷新</button>
-        <button id="recentClear">清空记录</button>
-      </div>
-      <ul id="recentList" class="list media-list grow"></ul>
     </section>
 
     <section id="page-search" class="page">
@@ -130,6 +123,7 @@
         <span id="searchInfo" class="label"></span>
       </div>
       <ul id="searchList" class="list media-list grow"></ul>
+      <div class="pager" id="searchPager"></div>
     </section>
 
     <section id="page-tags" class="page">
@@ -222,9 +216,41 @@
             <button id="setPlayerSave" class="primary">保存播放器默认值</button>
           </div>
         </div>
+
+        <div class="settings-card">
+          <div class="settings-title">列表</div>
+          <div class="settings-row">
+            <label>每页数量</label>
+            <select id="setPageSize">
+              <option value="10">10</option>
+              <option value="20">20</option>
+              <option value="30">30</option>
+              <option value="50">50</option>
+              <option value="100">100</option>
+            </select>
+          </div>
+          <div class="settings-hint">路径库、视频库、搜索结果、最近播放与播放器列表的每页条数，保存后立即生效。</div>
+          <div class="settings-actions">
+            <button id="setPageSizeSave" class="primary">应用</button>
+          </div>
+        </div>
+
+        <div class="settings-card">
+          <div class="settings-title">关于</div>
+          <div class="settings-hint">
+            媒体播放器 Web 版 <span id="aboutVersion" class="mono"></span><br>
+            ffmpeg：<span id="aboutFfmpeg"></span><br>
+            数据目录：<span id="aboutDataDir" class="mono"></span><br>
+            配置文件：<span id="aboutConfigFile" class="mono"></span>
+          </div>
+          <div class="settings-actions">
+            <button id="btnAbout" class="primary">关于与快捷键</button>
+          </div>
+        </div>
       </div>
     </section>
 
+    <div class="splitter hidden" id="detailSplitter" data-resize-target="detailPanel" data-invert="true" data-min="220" data-max="620" title="拖动调整宽度，双击恢复默认"></div>
     <aside id="detailPanel" class="hidden">
       <div class="side-head">
         <span>详情</span>
@@ -284,23 +310,34 @@
         </div>
       </div>
     </div>
+    <div class="splitter" id="playerSplitter" data-resize-target="playerPanel" data-invert="true" data-min="240" data-max="640" title="拖动调整宽度，双击恢复默认"></div>
     <aside id="playerPanel">
       <div class="panel-tabs">
         <button class="ptab-btn active" data-ptab="info">详情</button>
         <button class="ptab-btn" data-ptab="playlist">播放列表</button>
         <button class="ptab-btn" data-ptab="comments">评论</button>
+        <button class="ptab-btn" data-ptab="recent">最近播放</button>
       </div>
       <div id="ptab-info" class="ptab active">
         <p class="settings-hint">未开始播放。到「视频库」或「路径库」双击视频即可开始。</p>
       </div>
       <div id="ptab-playlist" class="ptab">
         <ul id="playerPlaylistView" class="list"></ul>
+        <div class="pager" id="playerPlaylistPager"></div>
       </div>
       <div id="ptab-comments" class="ptab">
         <div class="comment-toolbar">
           <button id="btnAddCommentPanel">添加评论</button>
         </div>
         <div id="playerCommentList" class="comment-list"></div>
+      </div>
+      <div id="ptab-recent" class="ptab">
+        <div class="comment-toolbar">
+          <button id="recentRefresh">刷新</button>
+          <button id="recentClear">清空记录</button>
+        </div>
+        <ul id="recentList" class="list media-list"></ul>
+        <div class="pager" id="recentPager"></div>
       </div>
     </aside>
   </div>
