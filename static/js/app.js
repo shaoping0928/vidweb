@@ -286,13 +286,49 @@
     if (mode) mode.checked = true;
   }
 
+  function applyRailCollapsed(collapsed) {
+    const app = $("#app");
+    if (app) app.classList.toggle("rail-collapsed", collapsed);
+    const btn = $("#railToggle");
+    if (btn) {
+      btn.textContent = collapsed ? "»" : "‹";
+      btn.title = collapsed ? "展开侧栏" : "收起侧栏";
+    }
+  }
+
+  function initRail() {
+    const stored = window.Prefs ? Prefs.get("mw/railCollapsed", "0") : "0";
+    applyRailCollapsed(stored === "1");
+    const btn = $("#railToggle");
+    if (btn) {
+      btn.addEventListener("click", () => {
+        const app = $("#app");
+        const next = !app.classList.contains("rail-collapsed");
+        applyRailCollapsed(next);
+        if (window.Prefs) Prefs.set("mw/railCollapsed", next ? "1" : "0");
+      });
+    }
+  }
+
   function setStatus(text) {
     $("#statusText").textContent = text || "";
   }
 
+  const TAB_TITLES = {
+    path: "路径库",
+    lib: "视频库",
+    search: "搜索",
+    tags: "标签",
+    player: "播放",
+    tasks: "任务",
+    settings: "设置",
+  };
+
   function setTab(name) {
     state.tab = name;
     $$("#tabs .tab").forEach((btn) => btn.classList.toggle("active", btn.dataset.tab === name));
+    const title = $("#pageTitle");
+    if (title) title.textContent = TAB_TITLES[name] || "";
     $$(".page").forEach((page) => page.classList.toggle("active", page.id === "page-" + name));
     if (name === "tags") renderTagManagePage();
     if (name === "tasks") renderTasksPage();
@@ -549,7 +585,37 @@
     const placeholder = document.createElement("div");
     placeholder.className = "thumb-ph";
     placeholder.textContent = "无缩略图";
-    thumb.append(img, placeholder);
+    const play = document.createElement("button");
+    play.className = "card-play";
+    play.title = "播放";
+    play.innerHTML =
+      "<svg viewBox='0 0 24 24' fill='currentColor'><polygon points='8 5 19 12 8 19 8 5'/></svg>";
+    play.addEventListener("click", (e) => {
+      e.stopPropagation();
+      li.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    });
+    const select = document.createElement("span");
+    select.className = "card-select";
+    select.title = "选择";
+    select.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const pos = state.selectedPaths.indexOf(options.path);
+      if (pos >= 0) state.selectedPaths.splice(pos, 1);
+      else state.selectedPaths.push(options.path);
+      state.selListEl = li.parentElement;
+      updateSelectionStyles();
+    });
+    thumb.append(img, placeholder, play, select);
+    const progress = Number(options.progress || 0);
+    if (progress > 0.001 && progress < 0.999) {
+      const bar = document.createElement("div");
+      bar.className = "card-progress";
+      const fill = document.createElement("div");
+      fill.className = "card-progress-fill";
+      fill.style.width = Math.min(100, progress * 100) + "%";
+      bar.appendChild(fill);
+      thumb.appendChild(bar);
+    }
     const meta = document.createElement("div");
     meta.className = "meta";
     const name = document.createElement("div");
@@ -1163,6 +1229,7 @@
       subtitle,
       missing: file.exists === false,
       hasThumb: file.has_thumb,
+      progress: file.duration_ms > 0 ? file.last_position_ms / file.duration_ms : 0,
     });
     if (file.rel_path) {
       li.title =
@@ -1259,6 +1326,7 @@
 
   function renderPlaylist() {
     const list = $("#playlistView");
+    list.classList.toggle("tree-mode", !!state.libFilters.tree);
     list.innerHTML = "";
     if (state.playlistLoading) {
       list.appendChild(makeEmptyHint("正在加载播放列表..."));
@@ -1300,6 +1368,7 @@
         subtitle,
         missing: info.exists === false,
         hasThumb: info.has_thumb,
+        progress: info.duration_ms > 0 ? info.last_position_ms / info.duration_ms : 0,
       });
       if (info.rel_path) {
         li.title =
@@ -2034,6 +2103,7 @@
           subtitle,
           missing: !item.exists,
           hasThumb: item.has_thumb,
+          progress: item.duration_ms > 0 ? (item.last_position_ms || 0) / item.duration_ms : 0,
         })
       );
     }
@@ -2083,6 +2153,7 @@
         subtitle: item.reason,
         missing: !item.exists,
         hasThumb: item.has_thumb,
+        progress: item.duration_ms > 0 ? (item.last_position_ms || 0) / item.duration_ms : 0,
       });
       li.title = item.path + "\n匹配: " + item.reason;
       list.appendChild(li);
@@ -2789,6 +2860,7 @@
     appInitialized = true;
     await Prefs.load();
     applyPrefs();
+    initRail();
     await refreshConfig();
     bindEvents();
     initSplitters();

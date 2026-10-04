@@ -8,22 +8,58 @@
 </head>
 <body>
 <div id="app">
-  <header id="topbar">
-    <div class="brand">媒体播放器</div>
+  <aside id="rail">
+    <div class="rail-brand">
+      <span class="rail-logo">MW</span>
+      <span class="rail-name">媒体播放器</span>
+    </div>
     <nav id="tabs">
-      <button class="tab active" data-tab="path">路径库</button>
-      <button class="tab" data-tab="lib">视频库</button>
-      <button class="tab" data-tab="search">搜索</button>
-      <button class="tab" data-tab="tags">标签</button>
-      <button class="tab" data-tab="player">播放</button>
-      <button class="tab" data-tab="tasks">任务</button>
-      <button class="tab" data-tab="settings">设置</button>
+      <button class="tab active" data-tab="path" title="路径库">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+        <span>路径库</span>
+      </button>
+      <button class="tab" data-tab="lib" title="视频库">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></svg>
+        <span>视频库</span>
+      </button>
+      <button class="tab" data-tab="search" title="搜索">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <span>搜索</span>
+      </button>
+      <button class="tab" data-tab="tags" title="标签">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41 13.42 20.58a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
+        <span>标签</span>
+      </button>
+      <button class="tab" data-tab="player" title="播放">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8"/></svg>
+        <span>播放</span>
+      </button>
+      <button class="tab" data-tab="tasks" title="任务">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+        <span>任务</span>
+      </button>
+      <button class="tab" data-tab="settings" title="设置">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+        <span>设置</span>
+      </button>
     </nav>
-  </header>
+    <div class="rail-foot">
+      <span id="railStatus">就绪</span>
+      <button id="railToggle" class="rail-toggle" title="收起侧栏">‹</button>
+    </div>
+  </aside>
 
-  <div id="ffmpegBanner" class="banner hidden"></div>
+  <div id="shell">
+    <header id="topbar">
+      <h1 id="pageTitle">路径库</h1>
+      <span class="spacer"></span>
+      <span id="topStatus" class="label"></span>
+    </header>
 
-  <main id="content">
+    <div id="ffmpegBanner" class="banner hidden"></div>
+
+    <div id="bodyRow">
+    <main id="content">
     <section id="page-path" class="page active">
       <div class="toolbar">
         <span class="label">路径</span>
@@ -292,15 +328,6 @@
       </div>
     </section>
 
-    <div class="splitter hidden" id="detailSplitter" data-resize-target="detailPanel" data-invert="true" data-min="220" data-max="620" title="拖动调整宽度，双击恢复默认"></div>
-    <aside id="detailPanel" class="hidden">
-      <div class="side-head">
-        <span>详情</span>
-        <button id="detailClose">关闭</button>
-      </div>
-      <div id="detailContent" class="detail-content"></div>
-    </aside>
-
   <section id="page-player" class="page">
   <div id="playerHeader">
     <button id="playerBack">返回媒体库</button>
@@ -396,8 +423,18 @@
   </div>
   </section>
   </main>
+    <div class="splitter hidden" id="detailSplitter" data-resize-target="detailPanel" data-invert="true" data-min="220" data-max="620" title="拖动调整宽度，双击恢复默认"></div>
+    <aside id="detailPanel" class="hidden">
+      <div class="side-head">
+        <span>详情</span>
+        <button id="detailClose">关闭</button>
+      </div>
+      <div id="detailContent" class="detail-content"></div>
+    </aside>
+    </div>
 
-  <footer id="statusbar"><span id="statusText"></span></footer>
+    <footer id="statusbar"><span id="statusText"></span></footer>
+  </div>
 </div>
 
 <input type="file" id="subtitleFileInput" accept=".srt,.ass,.ssa,.vtt" class="hidden">
