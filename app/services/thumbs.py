@@ -113,7 +113,9 @@ def _generate(path: str) -> None:
 
     if not run(seek, out) and seek > 0.15:
         run(0.1, out)
-    if not out.exists() or out.stat().st_size <= 0:
-        raise RuntimeError("ffmpeg produced no frame")
     file_id = db.ensure_file(path)
+    if not out.exists() or out.stat().st_size <= 0:
+        db.set_broken(file_id, True)
+        raise RuntimeError("ffmpeg produced no frame")
+    db.set_broken(file_id, False)
     db.set_thumbnail(file_id, str(out))

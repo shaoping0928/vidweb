@@ -10,12 +10,13 @@
 | 树形浏览 | 从盘符根开始懒加载，只显示含库内视频的目录链（纯 DB 查询，秒开） |
 | 搜索 / 最近 | 按名称搜索；最近播放记录，可清空 |
 | 标签 | 层级标签树（默认根标签「全部标签」，父标签包含子标签）、标签颜色、批量打标、按标签筛选 |
+| 损坏检测 | ffprobe 全库检测无有效视频流的文件并标记，可按状态筛出 / 排除；生成缩略图失败也会被动标记 |
 | 智能合集 | Plex Collections 风格：保存当前筛选条件为合集，侧栏一键应用 / 重命名 / 更新 / 删除 |
 | 播放列表 | 全局播放列表（按目录 + 相对路径存储），多入口加入 / 移除，支持保存 / 加载 m3u |
 | 播放器 | PotPlayer 风格控制栏：进度条悬停缩略图预览、续播、倍速、音量悬浮气泡、信息面板、截图、弹幕开关、全屏；播放队列支持删除与拖动排序 |
 | 转码播放 | 直连 / Direct Stream 直通重封装 / 零磁盘 fMP4 实时转码三级策略，硬件编码器可选，坏片段自动跳过 |
 | 截图库 | 播放中一键截图，服务端保存，独立页面浏览 / 删除 |
-| 任务中心 | 扫描 / 缩略图 / 转码等后台任务进度，历史记录 |
+| 任务中心 | 扫描 / 缩略图 / 损坏检测 / 转码等后台任务进度，历史记录 |
 | 设置 | 媒体目录管理、ffmpeg / ffprobe 路径、转码开关与硬件编码器探测、访问日志开关、工具测试 |
 
 ## 快速开始
@@ -74,7 +75,7 @@ data/                运行时生成（gitignore）：media.db、thumbs、screen
 
 ## 数据库
 
-SQLite（WAL），`data/media.db`，通过 `PRAGMA user_version` 迁移，当前 v9：
+SQLite（WAL），`data/media.db`，通过 `PRAGMA user_version` 迁移，当前 v10：
 
 | 版本 | 内容 |
 | --- | --- |
@@ -87,6 +88,7 @@ SQLite（WAL），`data/media.db`，通过 `PRAGMA user_version` 迁移，当前
 | v7 | `screenshots` |
 | v8 | `collections`（智能合集） |
 | v9 | 默认根标签「全部标签」，现有顶层标签迁移到其下；新建标签默认挂到根标签 |
+| v10 | `files.broken`（损坏标记，ffprobe 检测 / 缩略图失败时写入） |
 
 ## API 一览
 
@@ -96,8 +98,8 @@ SQLite（WAL），`data/media.db`，通过 `PRAGMA user_version` 迁移，当前
 | --- | --- |
 | 浏览 | `GET /browse`、`GET /drives`、`POST /explore` |
 | 扫描 | `POST /scan`、`GET /scan/status`、`POST /scan/cancel` |
-| 视频库 | `POST /playlist/query`（flat / folder / tree / paths_only）、`GET|PUT|DELETE /playlist`、`POST /playlist/add|remove|clean|restore`、`POST /playlist/filter` |
-| 文件 | `GET /files/detail|probe|all`、`POST /files/info|progress|played|media_info`、`POST /playlist/save|load` |
+| 视频库 | `POST /playlist/query`（flat / folder / tree / paths_only，`status` 或 `statuses` 多选并集）、`GET|PUT|DELETE /playlist`、`POST /playlist/add|remove|clean|restore`、`POST /playlist/filter` |
+| 文件 | `GET /files/detail|probe|all`、`POST /files/info|progress|played|media_info|detect_broken`、`POST /playlist/save|load` |
 | 标签 | `GET|POST /tags`、`PUT|DELETE /tags/{id}`、`GET /tags/{id}/files`、`GET|PUT /files/tags`、`POST /files/tags/common|batch` |
 | 合集 | `GET|POST /collections`、`GET /collections/counts`、`PUT|DELETE /collections/{id}` |
 | 评论 | `GET|POST /comments`、`PUT|DELETE /comments/{id}` |
@@ -144,7 +146,8 @@ Kotlin + Jetpack Compose + Media3 原生客户端（独立仓库 `../vidweb-andr
 
 | 提交 | 内容 |
 | --- | --- |
-| f0611d8 | 标签改为默认根标签「全部标签」结构（迁移 v9） |
+| 6c886e5 | 损坏检测与状态多选筛选（迁移 v10） |
+| 2157c7a | 标签改为默认根标签「全部标签」结构（迁移 v9） |
 | 2235f15 | 新增 Android 客户端功能总结文档 |
 | 1e106e7 | 修复新扫描视频缩略图不显示与播放页切回卡死 |
 | 0427404 | README 更新 |

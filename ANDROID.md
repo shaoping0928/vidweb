@@ -26,7 +26,7 @@
 ### 2.2 视频库
 
 - 筛选条件（服务端 `POST /api/playlist/query` 统一处理）：
-  - 文件名关键字、状态（全部/未播放/有进度/已播放/失效）、时长（≤10min / 10–30min / >30min / 未知）
+  - 文件名关键字、状态（全部/未播放/有进度/已播放/失效/损坏，可多选并集；不选=全部但排除失效）、时长（≤10min / 10–30min / >30min / 未知）
   - 标签多选 + 任一/全部匹配、排序（名称↑↓、最近播放、播放次数、时长、大小、修改时间）
   - 树形模式（`tree: true`，按文件夹层级懒加载，不分页；`folder: "路径"` 取某层视频）
 - 智能合集侧栏（`GET /api/collections`）：应用筛选、重命名、用当前筛选更新、删除；保存当前筛选（`POST /api/collections`）。
@@ -49,7 +49,7 @@
 
 ### 2.5 任务中心
 
-- 任务列表 `GET /api/tasks`：类型（扫描/缩略图/转码等）、状态、进度（processed/total/added）、错误、起止时间；支持删除历史 `DELETE /api/tasks/{id}`。
+- 任务列表 `GET /api/tasks`：类型（扫描/缩略图/损坏检测/转码等）、状态、进度（processed/total/added）、错误、起止时间；支持删除历史 `DELETE /api/tasks/{id}`。
 - 扫描期间轮询 `GET /api/scan/status`（`job_id`），可取消 `POST /api/scan/cancel`。
 - 缩略图批量生成 `POST /api/thumbs` + 进度 `GET /api/thumbs/status?path=`。
 
@@ -155,7 +155,7 @@
 | 目录库 | `GET /dirs`、`POST /dirs {path}`、`PUT /dirs/{id} {path}`、`DELETE /dirs/{id}` |
 | 扫描 | `POST /scan {path\|dir_id}`、`GET /scan/status?job_id=`、`POST /scan/cancel {job_id}` |
 | 视频库 | `POST /playlist/query`（字段见下）、`GET|PUT|DELETE /playlist`、`POST /playlist/add|remove {paths}`、`/clean`、`/restore`、`/filter {paths,tag_ids,match_all}` |
-| 文件 | `GET /files/detail?path=`、`GET /files/probe?path=`、`GET /files/all`、`POST /files/info {paths}`、`POST /files/progress {path,position_ms}`、`POST /files/played {path}`、`POST /files/media_info {path,duration_ms,width,height,title}` |
+| 文件 | `GET /files/detail?path=`、`GET /files/probe?path=`、`GET /files/all`、`POST /files/info {paths}`、`POST /files/progress {path,position_ms}`、`POST /files/played {path}`、`POST /files/media_info {path,duration_ms,width,height,title}`、`POST /files/detect_broken`（启动全库 ffprobe 检测任务，返回 `job_id`） |
 | m3u | `POST /playlist/save {file,paths}`、`POST /playlist/load {file}` |
 | 标签 | `GET|POST /tags`、`PUT|DELETE /tags/{id}`、`GET /tags/{id}/files`、`GET /files/tags?path=`、`PUT /files/tags {path,tags}`、`POST /files/tags/common {paths}`、`POST /files/tags/batch {paths,tags}` |
 | 合集 | `GET|POST /collections`、`GET /collections/counts`、`PUT|DELETE /collections/{id}` |
@@ -175,14 +175,17 @@
 ```json
 {
   "offset": 0, "limit": 30,
-  "search": "", "status": "all", "duration": "all",
+  "search": "", "status": "all", "statuses": null, "duration": "all",
   "tag_ids": [], "tag_match_all": false,
   "sort": "name",
   "paths_only": false, "tree": false, "folder": null
 }
 ```
 
-- `status`：`all|new|progress|played|missing`；`duration`：`all|short|medium|long|unknown`
+- `status`：`all|new|progress|played|missing|broken`（兼容旧客户端，单值）
+- `statuses`：数组，多选并集（如 `["progress","played"]` 只显示看过的可播放视频）；空/缺省时回退到 `status`；含 `missing` 时走磁盘存在性检查
+- 条目字段含 `exists`（磁盘存在）与 `broken`（ffprobe 判定无有效视频流 / 缩略图生成失败）
+- `duration`：`all|short|medium|long|unknown`
 - `sort`：`name|name_desc|recent|plays|duration|size|mtime`
 - `paths_only: true` 只返回路径数组（用于全选/批量操作）；`tree: true` 返回目录树；`folder` 指定某层。
 

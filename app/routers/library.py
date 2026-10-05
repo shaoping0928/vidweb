@@ -37,6 +37,7 @@ class PlaylistQuery(BaseModel):
     limit: int = 30
     search: str = ""
     status: str = "all"
+    statuses: Optional[list] = None
     duration: str = "all"
     tag_ids: list = []
     tag_match_all: bool = False
@@ -176,6 +177,7 @@ def _load_playlist_entries(playlist_entries):
                 "last_position_ms": record["last_position_ms"] if record else 0,
                 "play_count": record["play_count"] if record else 0,
                 "last_played_at": record["last_played_at"] if record else 0,
+                "broken": (record.get("broken") or 0) if record else 0,
                 "tags": tag_names.get(file_id, []),
                 "_tag_ids": tag_ids.get(file_id, set()),
             }
@@ -226,6 +228,7 @@ def _load_entries_db(playlist_entries, with_tags: bool = False):
                 "last_position_ms": record["last_position_ms"] if record else 0,
                 "play_count": record["play_count"] if record else 0,
                 "last_played_at": record["last_played_at"] if record else 0,
+                "broken": (record.get("broken") or 0) if record else 0,
                 "tags": tag_names.get(file_id, []),
                 "_tag_ids": tag_ids.get(file_id, set()),
             }
@@ -247,6 +250,7 @@ def _item_payload(entry: dict) -> dict:
         "last_position_ms": entry["last_position_ms"],
         "play_count": entry["play_count"],
         "last_played_at": entry["last_played_at"],
+        "broken": bool(entry.get("broken")),
         "tags": entry["tags"],
         "has_thumb": thumbs.cached(entry["path"]) is not None,
     }
@@ -333,6 +337,13 @@ def _build_tree(entries: list) -> list:
     return [finalize(node) for node in sorted(roots, key=lambda item: item["name"].lower())]
 
 
+def _uses_stat(body: PlaylistQuery) -> bool:
+    statuses = [str(item) for item in (body.statuses or []) if item]
+    if statuses:
+        return "missing" in statuses
+    return body.status == "missing"
+
+
 def _filter_entries(entries: list, body: PlaylistQuery) -> list:
     keyword = (body.search or "").strip().lower()
     tag_sets = []
@@ -340,23 +351,36 @@ def _filter_entries(entries: list, body: PlaylistQuery) -> list:
         for tag_id in body.tag_ids:
             tag_sets.append(db.tag_subtree_ids(int(tag_id)))
 
+    statuses = [str(item) for item in (body.statuses or []) if item]
+    if not statuses:
+        statuses = [body.status or "all"]
+
+    def matches(entry, status: str) -> bool:
+        if status == "missing":
+            return not entry["exists"]
+        if not entry["exists"]:
+            return False
+        if status == "broken":
+            return bool(entry.get("broken"))
+        if status == "new":
+            return entry["play_count"] <= 0
+        if status == "played":
+            return entry["play_count"] > 0
+        if status == "progress":
+            return entry["last_position_ms"] > 0
+        return True
+
+    def keep_status(entry) -> bool:
+        if "all" in statuses:
+            return entry["exists"]
+        return any(matches(entry, status) for status in statuses)
+
     filtered = []
     for entry in entries:
         if keyword and keyword not in entry["name"].lower():
             continue
-        exists = entry["exists"]
-        if body.status == "missing":
-            if exists:
-                continue
-        else:
-            if not exists:
-                continue
-            if body.status == "new" and entry["play_count"] > 0:
-                continue
-            if body.status == "played" and entry["play_count"] <= 0:
-                continue
-            if body.status == "progress" and not entry["last_position_ms"] > 0:
-                continue
+        if not keep_status(entry):
+            continue
         duration = entry["duration_ms"]
         if body.duration == "unknown" and duration > 0:
             continue
@@ -423,7 +447,7 @@ def query_playlist(body: PlaylistQuery):
 
     if body.tree:
         base = db.playlist_entries()
-        if body.status == "missing":
+        if _uses_stat(body):
             entries = _load_playlist_entries(base)
         else:
             entries = _load_entries_db(base, with_tags=bool(body.tag_ids))

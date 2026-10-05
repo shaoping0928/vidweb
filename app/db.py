@@ -199,6 +199,9 @@ def init_db() -> None:
                 (root_id, root_id),
             )
             conn.execute("PRAGMA user_version = 9")
+        if version < 10:
+            conn.execute("ALTER TABLE files ADD COLUMN broken INTEGER DEFAULT 0")
+            conn.execute("PRAGMA user_version = 10")
         conn.commit()
     finally:
         conn.close()
@@ -292,6 +295,16 @@ def set_thumbnail(file_id: int, thumbnail: str) -> None:
         return
     with connection() as conn:
         conn.execute("UPDATE files SET thumbnail = ? WHERE id = ?", (thumbnail, file_id))
+
+
+def set_broken(file_id: int, broken: bool) -> None:
+    if file_id <= 0:
+        return
+    with connection() as conn:
+        conn.execute(
+            "UPDATE files SET broken = ? WHERE id = ?",
+            (1 if broken else 0, file_id),
+        )
 
 
 def save_position(file_id: int, position_ms: int) -> None:
@@ -709,6 +722,14 @@ def all_files(limit: int = 20000) -> list:
             "SELECT path FROM files ORDER BY name LIMIT ?", (limit,)
         ).fetchall()
         return [r["path"] for r in rows]
+
+
+def files_with_ids(limit: int = 200000) -> list:
+    with connection() as conn:
+        rows = conn.execute(
+            "SELECT id, path FROM files ORDER BY id LIMIT ?", (limit,)
+        ).fetchall()
+        return [{"id": r["id"], "path": r["path"]} for r in rows]
 
 
 def tag_subtree_ids(tag_id: int) -> set:

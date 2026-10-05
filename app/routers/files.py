@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 from .. import config, db
 from ..security import safe_path
-from ..services import media_info, subtitles, thumbs
+from ..services import media_info, mediacheck, subtitles, thumbs
 from ..utils import decode_bytes
 
 router = APIRouter(prefix="/api")
@@ -197,6 +197,13 @@ def mark_played(body: PathBody):
 @router.get("/files/all")
 def files_all(limit: int = 20000):
     return {"items": db.all_files(limit)}
+
+
+@router.post("/files/detect_broken")
+def detect_broken(request: Request):
+    ip = request.client.host if request.client else ""
+    job_id = mediacheck.start_detect(ip=ip)
+    return {"job_id": job_id}
 
 
 @router.post("/files/info")
