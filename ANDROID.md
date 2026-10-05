@@ -81,6 +81,7 @@
    - 仅容器/音轨问题 → 可考虑本地直接播，或仍用服务端 remux；
    - 不可解或损坏 → 用 `/api/transcode/stream`。
 4. 流式转码模式的 seek = 重新请求 `&start=目标毫秒`（Web 即如此）；时长取本地记录的 `duration_ms`，进度 = `start + 播放器内相对位置`。
+5. **音频兼容性**：服务端转码流统一输出 AAC（源为 AAC 时直接 copy，否则转码）；客户端直连前应检查设备音频解码能力（`MediaCodecList` 按 MIME 查询），AC3/DTS/TrueHD 等不支持时直接走转码流，避免 ExoPlayer 静默丢弃音频轨导致「有画面没声音」。Android 1.1.7 已实现。
 
 ### 3.2 控制栏
 
