@@ -9,7 +9,7 @@
 | 媒体库 | 目录扫描入库、卡片网格 / 树形两种视图、按目录 / 标签 / 状态 / 时长 / 分辨率筛选、排序与分页 |
 | 树形浏览 | 从盘符根开始懒加载，只显示含库内视频的目录链（纯 DB 查询，秒开） |
 | 搜索 / 最近 | 按名称搜索；最近播放记录，可清空 |
-| 标签 | 层级标签树（父标签包含子标签）、标签颜色、批量打标、按标签筛选 |
+| 标签 | 层级标签树（默认根标签「全部标签」，父标签包含子标签）、标签颜色、批量打标、按标签筛选 |
 | 智能合集 | Plex Collections 风格：保存当前筛选条件为合集，侧栏一键应用 / 重命名 / 更新 / 删除 |
 | 播放列表 | 全局播放列表（按目录 + 相对路径存储），多入口加入 / 移除，支持保存 / 加载 m3u |
 | 播放器 | PotPlayer 风格控制栏：进度条悬停缩略图预览、续播、倍速、音量悬浮气泡、信息面板、截图、弹幕开关、全屏；播放队列支持删除与拖动排序 |
@@ -51,7 +51,7 @@ python run.py
 app/
   main.py            FastAPI 应用装配、静态资源挂载、/api/config
   config.py          配置加载、路径与工具探测、扩展名/MIME 表
-  db.py              SQLite 连接与全部 DAO、迁移 v1–v8
+  db.py              SQLite 连接与全部 DAO、迁移 v1–v9
   schema.sql         初始表结构
   security.py        路径安全校验（限定 allowed_roots）
   routers/           各 API 路由（见下表）
@@ -74,7 +74,7 @@ data/                运行时生成（gitignore）：media.db、thumbs、screen
 
 ## 数据库
 
-SQLite（WAL），`data/media.db`，通过 `PRAGMA user_version` 迁移，当前 v8：
+SQLite（WAL），`data/media.db`，通过 `PRAGMA user_version` 迁移，当前 v9：
 
 | 版本 | 内容 |
 | --- | --- |
@@ -86,6 +86,7 @@ SQLite（WAL），`data/media.db`，通过 `PRAGMA user_version` 迁移，当前
 | v6 | `dirs`、`playlist`（目录 + 相对路径），迁移旧播放列表 |
 | v7 | `screenshots` |
 | v8 | `collections`（智能合集） |
+| v9 | 默认根标签「全部标签」，现有顶层标签迁移到其下；新建标签默认挂到根标签 |
 
 ## API 一览
 
@@ -131,10 +132,22 @@ SQLite（WAL），`data/media.db`，通过 `PRAGMA user_version` 迁移，当前
 - 播放列表面板：悬停行显示 ✕ 从当前播放队列移除；整行可拖动排序；仅作用于本次会话队列，不影响全局播放列表。
 - 前端偏好统一存 `app_state`（`GET|PUT /api/state`），如音量、倍速、视图模式、筛选条件。
 
+## Android 客户端
+
+Kotlin + Jetpack Compose + Media3 原生客户端（独立仓库 `../vidweb-android`），对接同一后端，**无需后端改动**：
+
+- 路径库 / 视频库 / 搜索 / 标签 / 任务 / 设置、播放列表、评论弹幕、截图、续播与转码回退等与 Web 对齐
+- 移动端增强：手势（左右滑动调进度、长按倍速、双击快进、左亮度 / 右音量、双指缩放、锁屏）、进度预览图、评论标记点、横屏侧边栏、R8 压缩包约 2.8 MB
+- 对接与接口说明见 [ANDROID.md](ANDROID.md)，客户端功能与构建见 `../vidweb-android/README.md`
+
 ## 更新记录
 
 | 提交 | 内容 |
 | --- | --- |
+| f0611d8 | 标签改为默认根标签「全部标签」结构（迁移 v9） |
+| 2235f15 | 新增 Android 客户端功能总结文档 |
+| 1e106e7 | 修复新扫描视频缩略图不显示与播放页切回卡死 |
+| 0427404 | README 更新 |
 | 41d5ebc | 访问日志开关：默认关闭，设置页可即时切换 |
 | 5db1853 | 播放页播放列表支持删除与拖动排序 |
 | cbb227f | 损坏片段容错播放与项目 README |

@@ -8,6 +8,7 @@ from pathlib import Path
 from . import config
 
 DB_PATH = config.DATA_DIR / "media.db"
+DEFAULT_ROOT_TAG = "全部标签"
 
 
 def _now() -> int:
@@ -180,6 +181,24 @@ def init_db() -> None:
                 ")"
             )
             conn.execute("PRAGMA user_version = 8")
+            version = 8
+        if version < 9:
+            row = conn.execute(
+                "SELECT id FROM tags WHERE name = ?", (DEFAULT_ROOT_TAG,)
+            ).fetchone()
+            if row:
+                root_id = row["id"]
+            else:
+                cursor = conn.execute(
+                    "INSERT INTO tags(name, color, created_at, parent_id) VALUES(?,?,?,NULL)",
+                    (DEFAULT_ROOT_TAG, None, _now()),
+                )
+                root_id = cursor.lastrowid
+            conn.execute(
+                "UPDATE tags SET parent_id = ? WHERE parent_id IS NULL AND id != ?",
+                (root_id, root_id),
+            )
+            conn.execute("PRAGMA user_version = 9")
         conn.commit()
     finally:
         conn.close()
@@ -350,6 +369,18 @@ def ensure_tag(name: str, parent_id=None) -> int:
         row = conn.execute("SELECT id FROM tags WHERE name = ?", (name,)).fetchone()
         if row:
             return row["id"]
+        if parent_id is None:
+            root = conn.execute(
+                "SELECT id FROM tags WHERE name = ?", (DEFAULT_ROOT_TAG,)
+            ).fetchone()
+            if root:
+                parent_id = root["id"]
+            else:
+                cur = conn.execute(
+                    "INSERT INTO tags(name, color, parent_id, created_at) VALUES(?,?,?,?)",
+                    (DEFAULT_ROOT_TAG, None, None, _now()),
+                )
+                parent_id = cur.lastrowid
         cur = conn.execute(
             "INSERT INTO tags(name, color, parent_id, created_at) VALUES(?,?,?,?)",
             (name, None, parent_id, _now()),
@@ -456,6 +487,15 @@ def set_file_tags(file_id: int, tag_names: list) -> bool:
     if file_id <= 0:
         return False
     with connection() as conn:
+        root = conn.execute(
+            "SELECT id FROM tags WHERE name = ?", (DEFAULT_ROOT_TAG,)
+        ).fetchone()
+        root_id = root["id"] if root else None
+        if root_id is None:
+            root_id = conn.execute(
+                "INSERT INTO tags(name, color, parent_id, created_at) VALUES(?,?,?,?)",
+                (DEFAULT_ROOT_TAG, None, None, _now()),
+            ).lastrowid
         conn.execute("DELETE FROM file_tags WHERE file_id = ?", (file_id,))
         for name in tag_names:
             name = (name or "").strip()
@@ -466,7 +506,8 @@ def set_file_tags(file_id: int, tag_names: list) -> bool:
                 tag_id = row["id"]
             else:
                 tag_id = conn.execute(
-                    "INSERT INTO tags(name, created_at) VALUES(?,?)", (name, _now())
+                    "INSERT INTO tags(name, parent_id, created_at) VALUES(?,?,?)",
+                    (name, root_id, _now()),
                 ).lastrowid
             conn.execute(
                 "INSERT OR IGNORE INTO file_tags(file_id, tag_id) VALUES(?,?)",
