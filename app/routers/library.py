@@ -39,6 +39,7 @@ class PlaylistQuery(BaseModel):
     status: str = "all"
     statuses: Optional[list] = None
     duration: str = "all"
+    durations: Optional[list] = None
     tag_ids: list = []
     tag_match_all: bool = False
     sort: str = "name"
@@ -337,13 +338,6 @@ def _build_tree(entries: list) -> list:
     return [finalize(node) for node in sorted(roots, key=lambda item: item["name"].lower())]
 
 
-def _uses_stat(body: PlaylistQuery) -> bool:
-    statuses = [str(item) for item in (body.statuses or []) if item]
-    if statuses:
-        return "missing" in statuses
-    return body.status == "missing"
-
-
 def _filter_entries(entries: list, body: PlaylistQuery) -> list:
     keyword = (body.search or "").strip().lower()
     tag_sets = []
@@ -375,20 +369,29 @@ def _filter_entries(entries: list, body: PlaylistQuery) -> list:
             return entry["exists"]
         return any(matches(entry, status) for status in statuses)
 
+    durations = [str(item) for item in (body.durations or []) if item]
+    if not durations:
+        durations = [body.duration or "all"]
+
+    def matches_duration(entry) -> bool:
+        if "all" in durations:
+            return True
+        value = entry["duration_ms"]
+        return any(
+            (item == "unknown" and value <= 0)
+            or (item == "short" and 0 < value <= 600000)
+            or (item == "medium" and 600000 < value <= 1800000)
+            or (item == "long" and value > 1800000)
+            for item in durations
+        )
+
     filtered = []
     for entry in entries:
         if keyword and keyword not in entry["name"].lower():
             continue
         if not keep_status(entry):
             continue
-        duration = entry["duration_ms"]
-        if body.duration == "unknown" and duration > 0:
-            continue
-        if body.duration == "short" and not (0 < duration <= 600000):
-            continue
-        if body.duration == "medium" and not (600000 < duration <= 1800000):
-            continue
-        if body.duration == "long" and not duration > 1800000:
+        if not matches_duration(entry):
             continue
         if tag_sets:
             own = entry["_tag_ids"]
@@ -446,17 +449,11 @@ def query_playlist(body: PlaylistQuery):
         }
 
     if body.tree:
-        base = db.playlist_entries()
-        if _uses_stat(body):
-            entries = _load_playlist_entries(base)
-        else:
-            entries = _load_entries_db(base, with_tags=bool(body.tag_ids))
-        filtered = _filter_entries(entries, body)
-        _sort_entries(filtered, body.sort)
+        entries = _load_entries_db(db.playlist_entries())
         return {
-            "tree": _build_tree(filtered),
+            "tree": _build_tree(entries),
             "total": len(entries),
-            "filtered": len(filtered),
+            "filtered": len(entries),
         }
 
     entries = _load_playlist_entries(db.playlist_entries())

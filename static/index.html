@@ -107,20 +107,21 @@
             <input id="plSearch" placeholder="输入关键字筛选">
           </div>
           <div class="filter-group">
-            <div class="filter-title">状态</div>
-            <label class="check"><input type="radio" name="plStatus" value="all" checked>全部</label>
-            <label class="check"><input type="radio" name="plStatus" value="new">未播放</label>
-            <label class="check"><input type="radio" name="plStatus" value="progress">有进度</label>
-            <label class="check"><input type="radio" name="plStatus" value="played">已播放</label>
-            <label class="check"><input type="radio" name="plStatus" value="missing">失效</label>
+            <div class="filter-title">状态（可多选）</div>
+            <label class="check"><input type="checkbox" class="pl-status" value="all" checked>全部</label>
+            <label class="check"><input type="checkbox" class="pl-status" value="new">未播放</label>
+            <label class="check"><input type="checkbox" class="pl-status" value="progress">有进度</label>
+            <label class="check"><input type="checkbox" class="pl-status" value="played">已播放</label>
+            <label class="check"><input type="checkbox" class="pl-status" value="missing">失效</label>
+            <label class="check"><input type="checkbox" class="pl-status" value="broken">损坏</label>
           </div>
           <div class="filter-group">
-            <div class="filter-title">时长</div>
-            <label class="check"><input type="radio" name="plDuration" value="all" checked>全部</label>
-            <label class="check"><input type="radio" name="plDuration" value="short">10 分钟以内</label>
-            <label class="check"><input type="radio" name="plDuration" value="medium">10 – 30 分钟</label>
-            <label class="check"><input type="radio" name="plDuration" value="long">30 分钟以上</label>
-            <label class="check"><input type="radio" name="plDuration" value="unknown">未知时长</label>
+            <div class="filter-title">时长（可多选）</div>
+            <label class="check"><input type="checkbox" class="pl-duration" value="all" checked>全部</label>
+            <label class="check"><input type="checkbox" class="pl-duration" value="short">10 分钟以内</label>
+            <label class="check"><input type="checkbox" class="pl-duration" value="medium">10 – 30 分钟</label>
+            <label class="check"><input type="checkbox" class="pl-duration" value="long">30 分钟以上</label>
+            <label class="check"><input type="checkbox" class="pl-duration" value="unknown">未知时长</label>
           </div>
           <div class="filter-group">
             <div class="filter-title">
@@ -152,6 +153,7 @@
           <div class="filter-group">
             <div class="filter-title">显示方式</div>
             <label class="check"><input type="checkbox" id="plTree">按文件夹树形显示（不分页）</label>
+            <label class="check" title="关闭后，展开文件夹时显示全部视频（树形模式下）"><input type="checkbox" id="plFolderFilter" checked>打开文件夹时应用筛选</label>
           </div>
           <button id="plResetFilters">重置筛选</button>
           <button id="plRestore" title="把数据库中已入库的视频全部加入播放列表">从媒体库恢复</button>

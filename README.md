@@ -98,7 +98,7 @@ SQLite（WAL），`data/media.db`，通过 `PRAGMA user_version` 迁移，当前
 | --- | --- |
 | 浏览 | `GET /browse`、`GET /drives`、`POST /explore` |
 | 扫描 | `POST /scan`、`GET /scan/status`、`POST /scan/cancel` |
-| 视频库 | `POST /playlist/query`（flat / folder / tree / paths_only，`status` 或 `statuses` 多选并集）、`GET|PUT|DELETE /playlist`、`POST /playlist/add|remove|clean|restore`、`POST /playlist/filter` |
+| 视频库 | `POST /playlist/query`（flat / folder / tree / paths_only，`status`/`statuses`、`duration`/`durations` 多选并集；tree 忽略筛选、folder 应用筛选）、`GET|PUT|DELETE /playlist`、`POST /playlist/add|remove|clean|restore`、`POST /playlist/filter` |
 | 文件 | `GET /files/detail|probe|all`、`POST /files/info|progress|played|media_info|detect_broken`、`POST /playlist/save|load` |
 | 标签 | `GET|POST /tags`、`PUT|DELETE /tags/{id}`、`GET /tags/{id}/files`、`GET|PUT /files/tags`、`POST /files/tags/common|batch` |
 | 合集 | `GET|POST /collections`、`GET /collections/counts`、`PUT|DELETE /collections/{id}` |

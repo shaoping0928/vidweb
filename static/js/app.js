@@ -253,15 +253,26 @@
   function loadLibFilters() {
     const defaults = {
       search: "",
-      status: "all",
-      duration: "all",
+      statuses: [],
+      durations: [],
+      folderFilter: true,
       sort: "name",
       tagMode: "any",
       tagNames: [],
       tree: false,
     };
-    const saved = Prefs.getJSON("mw/libFilters", {});
-    return Object.assign(defaults, saved || {});
+    const saved = Prefs.getJSON("mw/libFilters", {}) || {};
+    const merged = Object.assign(defaults, saved);
+    if (!Array.isArray(merged.statuses)) merged.statuses = [];
+    if (!merged.statuses.length && saved.status && saved.status !== "all") {
+      merged.statuses = [saved.status];
+    }
+    if (!Array.isArray(merged.durations)) merged.durations = [];
+    if (!merged.durations.length && saved.duration && saved.duration !== "all") {
+      merged.durations = [saved.duration];
+    }
+    merged.folderFilter = saved.folderFilter !== false;
+    return merged;
   }
 
   function saveLibFilters() {
@@ -272,14 +283,16 @@
     $("#plSearch").value = state.libFilters.search || "";
     $("#plSort").value = state.libFilters.sort || "name";
     $("#plTree").checked = !!state.libFilters.tree;
-    const status = document.querySelector(
-      'input[name="plStatus"][value="' + (state.libFilters.status || "all") + '"]'
-    );
-    if (status) status.checked = true;
-    const duration = document.querySelector(
-      'input[name="plDuration"][value="' + (state.libFilters.duration || "all") + '"]'
-    );
-    if (duration) duration.checked = true;
+    const folderFilter = $("#plFolderFilter");
+    if (folderFilter) folderFilter.checked = state.libFilters.folderFilter !== false;
+    const statuses = state.libFilters.statuses || [];
+    $$("input.pl-status").forEach((box) => {
+      box.checked = box.value === "all" ? statuses.length === 0 : statuses.includes(box.value);
+    });
+    const durations = state.libFilters.durations || [];
+    $$("input.pl-duration").forEach((box) => {
+      box.checked = box.value === "all" ? durations.length === 0 : durations.includes(box.value);
+    });
     const mode = document.querySelector(
       'input[name="plTagMode"][value="' + (state.libFilters.tagMode || "any") + '"]'
     );
@@ -1102,8 +1115,9 @@
   function resetLibFilters() {
     state.libFilters = {
       search: "",
-      status: "all",
-      duration: "all",
+      statuses: [],
+      durations: [],
+      folderFilter: true,
       sort: "name",
       tagMode: "any",
       tagNames: [],
@@ -1123,15 +1137,35 @@
       .filter((id) => id !== undefined);
   }
 
-  function playlistQueryBody(extra) {
+  function playlistQueryBody(extra, applyFilters = true) {
+    const sort = state.libFilters.sort || "name";
+    if (!applyFilters) {
+      return Object.assign(
+        {
+          search: "",
+          status: "all",
+          statuses: [],
+          duration: "all",
+          durations: [],
+          tag_ids: [],
+          tag_match_all: false,
+          sort,
+        },
+        extra || {}
+      );
+    }
+    const statuses = (state.libFilters.statuses || []).slice();
+    const durations = (state.libFilters.durations || []).slice();
     return Object.assign(
       {
         search: state.libFilters.search || "",
-        status: state.libFilters.status || "all",
-        duration: state.libFilters.duration || "all",
+        status: statuses.length === 1 ? statuses[0] : "all",
+        statuses,
+        duration: durations.length === 1 ? durations[0] : "all",
+        durations,
         tag_ids: selectedTagIds(),
         tag_match_all: state.libFilters.tagMode === "all",
-        sort: state.libFilters.sort || "name",
+        sort,
       },
       extra || {}
     );
@@ -1261,7 +1295,7 @@
       try {
         const data = await API.post(
           "/api/playlist/query",
-          playlistQueryBody({ folder: key })
+          playlistQueryBody({ folder: key }, state.libFilters.folderFilter !== false)
         );
         if (token !== state.treeToken) return;
         state.treeFiles.set(key, data.items || []);
@@ -1522,10 +1556,15 @@
   /* ------------------------------------------------------------ collections */
 
   function collectionFiltersFromState() {
+    const statuses = (state.libFilters.statuses || []).slice();
+    const durations = (state.libFilters.durations || []).slice();
     return {
       search: state.libFilters.search || "",
-      status: state.libFilters.status || "all",
-      duration: state.libFilters.duration || "all",
+      status: statuses.length === 1 ? statuses[0] : "all",
+      statuses,
+      duration: durations.length === 1 ? durations[0] : "all",
+      durations,
+      folderFilter: state.libFilters.folderFilter !== false,
       tagNames: (state.libFilters.tagNames || []).slice(),
       tagMode: state.libFilters.tagMode || "any",
       sort: state.libFilters.sort || "name",
@@ -1541,16 +1580,31 @@
       progress: "有进度",
       played: "已播放",
       missing: "失效",
+      broken: "损坏",
     };
-    if (f.status && f.status !== "all") parts.push(statusNames[f.status] || f.status);
+    const statusList =
+      Array.isArray(f.statuses) && f.statuses.length
+        ? f.statuses
+        : f.status && f.status !== "all"
+          ? [f.status]
+          : [];
+    if (statusList.length) {
+      parts.push(statusList.map((s) => statusNames[s] || s).join(" / "));
+    }
     const durationNames = {
       short: "10 分钟以内",
       medium: "10 – 30 分钟",
       long: "30 分钟以上",
       unknown: "未知时长",
     };
-    if (f.duration && f.duration !== "all") {
-      parts.push(durationNames[f.duration] || f.duration);
+    const durationList =
+      Array.isArray(f.durations) && f.durations.length
+        ? f.durations
+        : f.duration && f.duration !== "all"
+          ? [f.duration]
+          : [];
+    if (durationList.length) {
+      parts.push(durationList.map((d) => durationNames[d] || d).join(" / "));
     }
     const tagNames = f.tagNames || [];
     if (tagNames.length) {
@@ -1615,8 +1669,19 @@
   function applyCollection(item) {
     const filters = item.filters || {};
     state.libFilters.search = filters.search || "";
-    state.libFilters.status = filters.status || "all";
-    state.libFilters.duration = filters.duration || "all";
+    const storedStatuses = Array.isArray(filters.statuses) ? filters.statuses.slice() : [];
+    state.libFilters.statuses = storedStatuses.length
+      ? storedStatuses
+      : filters.status && filters.status !== "all"
+        ? [filters.status]
+        : [];
+    const storedDurations = Array.isArray(filters.durations) ? filters.durations.slice() : [];
+    state.libFilters.durations = storedDurations.length
+      ? storedDurations
+      : filters.duration && filters.duration !== "all"
+        ? [filters.duration]
+        : [];
+    state.libFilters.folderFilter = filters.folderFilter !== false;
     state.libFilters.tagNames = (filters.tagNames || []).slice();
     state.libFilters.tagMode = filters.tagMode === "all" ? "all" : "any";
     state.libFilters.sort = filters.sort || "name";
@@ -2741,22 +2806,59 @@
         refreshPlaylistView(true);
       }, 200);
     });
-    $$('input[name="plStatus"]').forEach((radio) =>
-      radio.addEventListener("change", () => {
-        state.libFilters.status = radio.value;
+    $$("input.pl-status").forEach((box) =>
+      box.addEventListener("change", () => {
+        const current = new Set(state.libFilters.statuses || []);
+        if (box.value === "all") {
+          current.clear();
+        } else if (current.has(box.value)) {
+          current.delete(box.value);
+        } else {
+          current.add(box.value);
+        }
+        state.libFilters.statuses = Array.from(current);
+        $$("input.pl-status").forEach((item) => {
+          item.checked =
+            item.value === "all"
+              ? state.libFilters.statuses.length === 0
+              : state.libFilters.statuses.includes(item.value);
+        });
         clearActiveCollection();
         saveLibFilters();
         refreshPlaylistView(true);
       })
     );
-    $$('input[name="plDuration"]').forEach((radio) =>
-      radio.addEventListener("change", () => {
-        state.libFilters.duration = radio.value;
+    $$("input.pl-duration").forEach((box) =>
+      box.addEventListener("change", () => {
+        const current = new Set(state.libFilters.durations || []);
+        if (box.value === "all") {
+          current.clear();
+        } else if (current.has(box.value)) {
+          current.delete(box.value);
+        } else {
+          current.add(box.value);
+        }
+        state.libFilters.durations = Array.from(current);
+        $$("input.pl-duration").forEach((item) => {
+          item.checked =
+            item.value === "all"
+              ? state.libFilters.durations.length === 0
+              : state.libFilters.durations.includes(item.value);
+        });
         clearActiveCollection();
         saveLibFilters();
         refreshPlaylistView(true);
       })
     );
+    const folderFilterBox = $("#plFolderFilter");
+    if (folderFilterBox) {
+      folderFilterBox.addEventListener("change", () => {
+        state.libFilters.folderFilter = folderFilterBox.checked;
+        clearActiveCollection();
+        saveLibFilters();
+        if (state.libFilters.tree) refreshPlaylistView(true);
+      });
+    }
     $$('input[name="plTagMode"]').forEach((radio) =>
       radio.addEventListener("change", () => {
         state.libFilters.tagMode = radio.value;
