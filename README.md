@@ -27,7 +27,7 @@ copy config.example.json config.json   # 按需修改
 python run.py
 ```
 
-启动后访问 <http://127.0.0.1:8765>（端口可在 config.json 修改）。
+启动后访问 <http://0.0.0.0:8765>（端口可在 config.json 修改）。
 
 - 需要在 `config.json` 中配置 `ffmpeg` / `ffprobe` 路径（留空则从 PATH 查找），缩略图、媒体信息、转码依赖它们。
 - `allowed_roots` 为空时自动枚举本机盘符作为可浏览根。
@@ -37,7 +37,7 @@ python run.py
 
 | 键 | 默认值 | 说明 |
 | --- | --- | --- |
-| `host` | `127.0.0.1` | 监听地址 |
+| `host` | `0.0.0.0` | 监听地址 |
 | `port` | `8765` | 监听端口 |
 | `allowed_roots` | `[]` | 允许浏览的根路径，空 = 自动检测盘符 |
 | `library_dirs` | `[]` | 媒体库目录（也可在设置页管理） |

@@ -7,7 +7,7 @@ from app import config
 
 def main():
     cfg = config.load_config()
-    host = str(cfg.get("host") or "127.0.0.1")
+    host = str(cfg.get("host") or "0.0.0.0")
     port = int(cfg.get("port") or 8765)
     print(f"{config.APP_NAME} {config.APP_VERSION} -> http://{host}:{port}")
     if not config.ffmpeg_path():

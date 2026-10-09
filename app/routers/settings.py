@@ -45,7 +45,7 @@ def _resolve_tool(value: str, name: str):
 def _settings_payload() -> dict:
     cfg = config.load_config()
     return {
-        "host": cfg.get("host") or "127.0.0.1",
+        "host": cfg.get("host") or "0.0.0.0",
         "port": int(cfg.get("port") or 8765),
         "allowed_roots": [str(p) for p in (cfg.get("allowed_roots") or [])],
         "effective_roots": [str(p) for p in config.allowed_roots()],
@@ -73,7 +73,7 @@ def update_settings(body: SettingsBody):
     restart_required = False
 
     if body.host is not None:
-        host = body.host.strip() or "127.0.0.1"
+        host = body.host.strip() or "0.0.0.0"
         if host != (cfg.get("host") or ""):
             restart_required = True
         cfg["host"] = host

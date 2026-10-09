@@ -16,7 +16,7 @@ APP_NAME = "Media Web"
 APP_VERSION = "1.0.0"
 
 DEFAULTS = {
-    "host": "127.0.0.1",
+    "host": "0.0.0.0",
     "port": 8765,
     "allowed_roots": [],
     "library_dirs": [],
