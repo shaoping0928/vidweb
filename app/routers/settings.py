@@ -22,6 +22,11 @@ class SettingsBody(BaseModel):
     transcode: Optional[bool] = None
     transcode_encoder: Optional[str] = None
     access_log: Optional[bool] = None
+    hfs_exe: Optional[str] = None
+    hfs_url: Optional[str] = None
+    hfs_vfs: Optional[str] = None
+    hfs_args: Optional[str] = None
+    hfs_autostart: Optional[bool] = None
 
 
 class TestToolBody(BaseModel):
@@ -54,6 +59,11 @@ def _settings_payload() -> dict:
         "transcode": bool(cfg.get("transcode")),
         "transcode_encoder": (cfg.get("transcode_encoder") or "auto").lower(),
         "access_log": bool(cfg.get("access_log")),
+        "hfs_exe": cfg.get("hfs_exe") or "",
+        "hfs_url": cfg.get("hfs_url") or "",
+        "hfs_vfs": cfg.get("hfs_vfs") or "",
+        "hfs_args": cfg.get("hfs_args") or "",
+        "hfs_autostart": bool(cfg.get("hfs_autostart")),
         "ffmpeg_resolved": config.ffmpeg_path() or "",
         "ffprobe_resolved": config.ffprobe_path() or "",
         "data_dir": str(config.DATA_DIR),
@@ -116,6 +126,20 @@ def update_settings(body: SettingsBody):
     if body.access_log is not None:
         cfg["access_log"] = bool(body.access_log)
         logging.getLogger("uvicorn.access").disabled = not cfg["access_log"]
+
+    if body.hfs_exe is not None:
+        value = body.hfs_exe.strip()
+        if value and not _resolve_tool(value, "hfs"):
+            raise HTTPException(status_code=400, detail=f"未找到 hfs 可执行文件: {value}")
+        cfg["hfs_exe"] = value
+    if body.hfs_url is not None:
+        cfg["hfs_url"] = body.hfs_url.strip()
+    if body.hfs_vfs is not None:
+        cfg["hfs_vfs"] = body.hfs_vfs.strip()
+    if body.hfs_args is not None:
+        cfg["hfs_args"] = body.hfs_args.strip()
+    if body.hfs_autostart is not None:
+        cfg["hfs_autostart"] = bool(body.hfs_autostart)
 
     config.save_config(cfg)
     return {

@@ -4,5 +4,13 @@
   "allowed_roots": [],
   "library_dirs": [],
   "ffmpeg": "",
-  "ffprobe": ""
+  "ffprobe": "",
+  "transcode": false,
+  "transcode_encoder": "auto",
+  "access_log": false,
+  "hfs_exe": "",
+  "hfs_url": "",
+  "hfs_vfs": "",
+  "hfs_args": "",
+  "hfs_autostart": false
 }

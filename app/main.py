@@ -4,7 +4,8 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from . import config, db
-from .routers import browse, collections, comments, dirs, files, library, recent, screenshots, search, settings, state, tags, tasks, thumbs, transcode
+from .routers import browse, collections, comments, dirs, files, hfs, library, recent, screenshots, search, settings, state, tags, tasks, thumbs, transcode
+from .services import hfs as hfs_service
 
 MINIMAL_HTML = """
 <!DOCTYPE html>
@@ -19,6 +20,7 @@ MINIMAL_HTML = """
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_db()
+    hfs_service.autostart()
     yield
 
 
@@ -41,6 +43,7 @@ app.include_router(browse.router)
 app.include_router(library.router)
 app.include_router(collections.router)
 app.include_router(files.router)
+app.include_router(hfs.router)
 app.include_router(tags.router)
 app.include_router(comments.router)
 app.include_router(search.router)

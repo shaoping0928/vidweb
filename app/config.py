@@ -25,6 +25,11 @@ DEFAULTS = {
     "transcode": False,
     "transcode_encoder": "auto",
     "access_log": False,
+    "hfs_exe": "",
+    "hfs_url": "",
+    "hfs_vfs": "",
+    "hfs_args": "",
+    "hfs_autostart": False,
 }
 
 

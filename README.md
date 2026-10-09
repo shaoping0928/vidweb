@@ -17,7 +17,8 @@
 | 转码播放 | 直连 / Direct Stream 直通重封装 / 零磁盘 fMP4 实时转码三级策略，硬件编码器可选，坏片段自动跳过 |
 | 截图库 | 播放中一键截图，服务端保存，独立页面浏览 / 删除 |
 | 任务中心 | 扫描 / 缩略图 / 损坏检测 / 转码等后台任务进度，历史记录 |
-| 设置 | 媒体目录管理、ffmpeg / ffprobe 路径、转码开关与硬件编码器探测、访问日志开关、工具测试 |
+| 文件共享 | 集成 HFS（HTTP File Server）：在 Web 端一键启动 / 停止并内嵌其界面，上传、下载任意文件（不限类型） |
+| 设置 | 媒体目录管理、ffmpeg / ffprobe 路径、转码开关与硬件编码器探测、访问日志开关、HFS 路径、工具测试 |
 
 ## 快速开始
 
@@ -45,6 +46,11 @@ python run.py
 | `transcode` | `false` | 是否启用服务端转码 |
 | `transcode_encoder` | `auto` | 硬件编码器：`auto` / `nvenc` / `qsv` / `amf` / `cpu` |
 | `access_log` | `false` | 是否在控制台输出访问日志（每个请求一行），设置页可即时开关 |
+| `hfs_exe` | `""` | HFS（hfs.exe）完整路径或所在目录，留空关闭文件共享功能 |
+| `hfs_url` | `""` | HFS 下载/嵌入地址；留空则按 hfs.ini 中的 `ip`/`port` 自动生成 |
+| `hfs_vfs` | `""` | 可选：启动 HFS 时加载的 `.vfs` 文件（决定共享哪些目录） |
+| `hfs_args` | `""` | 可选：追加给 hfs.exe 的命令行参数 |
+| `hfs_autostart` | `false` | 后端启动时自动启动 HFS |
 
 ## 目录结构
 
@@ -60,6 +66,8 @@ app/
     scanner.py       目录扫描入库
     scanjobs.py      扫描任务与取消
     thumbs.py        缩略图生成与缓存
+    mediacheck.py    损坏检测（ffprobe）
+    hfs.py           HFS 进程管理（启动 / 停止 / 状态）
     media_info.py    ffprobe 媒体信息
     transcode.py     Direct Stream 计划与 fMP4 直推流、编码器探测
     subtitles.py     字幕解析（接口保留，前端未使用）
@@ -109,6 +117,7 @@ SQLite（WAL），`data/media.db`，通过 `PRAGMA user_version` 迁移，当前
 | 转码 | `GET /transcode/info|plan|stream` |
 | 任务 | `GET /tasks`、`DELETE /tasks/{id}` |
 | 设置 | `GET|PUT /settings`、`POST /settings/test-tool` |
+| 文件共享 | `GET /hfs/status`、`POST /hfs/start`、`POST /hfs/stop` |
 | 状态 | `GET|PUT /state`、`DELETE /state/{key}` |
 | 目录 | `GET|POST /dirs`、`PUT|DELETE /dirs/{id}` |
 | 字幕（保留） | `GET /subtitles`、`POST /subtitles/parse` |
@@ -125,6 +134,16 @@ SQLite（WAL），`data/media.db`，通过 `PRAGMA user_version` 迁移，当前
 - 坏片段容错：ffmpeg 以 `-err_detect ignore_err` + `-fflags +discardcorrupt` 丢弃损坏包继续转码；若仍中断，播放器自动从当前位置 +8s 跳过损坏片段（最多 4 次），流被提前截断同样触发；多次失败后保留流模式，拖动进度条即可从新位置重试。
 - 无帧看门狗：播放 5 秒仍无 `requestVideoFrameCallback` 帧（黑屏但不报错）时，自动切实时转码或提示开启转码；后台标签页不检测。
 - 进度：播放中定时 `POST /files/progress`，`POST /files/played` 记录播放次数；续播从 `last_position_ms` 开始。
+
+## 文件共享（HFS）
+
+集成 rejetto 的 HFS（HTTP File Server，2.x 单文件 `hfs.exe`），用于在局域网内快速上传 / 下载任意文件（APK、安装包、资料等），不受文件类型限制：
+
+1. 在「设置 → 文件共享（HFS）」填写 `hfs.exe` 路径（留空则关闭该功能），可选填写下载地址、VFS、额外参数与「自动启动」，保存。
+2. 打开左侧「文件」页，点「启动」即可启动 HFS，页面内嵌其界面，可上传、下载、浏览文件；也可「新窗口打开」。
+3. 共享目录、端口、账号密码等在 HFS 自身界面或 `hfs.ini` 中配置；`hfs_url` 留空时会读取 `hfs.ini` 的 `ip` / `port` 自动生成地址。
+
+后端通过 `services/hfs.py` 管理 HFS 子进程（启动 / 停止 / 状态）。该功能依赖 Windows（`hfs.exe`），仅在配置了 `hfs_exe` 时可用。
 
 ## 前端说明
 

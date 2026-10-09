@@ -334,6 +334,7 @@
     tags: "标签",
     player: "播放",
     tasks: "任务",
+    hfs: "文件共享",
     settings: "设置",
   };
 
@@ -353,6 +354,7 @@
     $$(".page").forEach((page) => page.classList.toggle("active", page.id === "page-" + name));
     if (name === "tags") renderTagManagePage();
     if (name === "tasks") renderTasksPage();
+    if (name === "hfs") loadHfsPage();
     if (name === "settings") loadSettings();
     if (name === "player") {
       setDetailVisible(false);
@@ -959,6 +961,99 @@
   };
 
   let tasksTimer = null;
+
+  /* ------------------------------------------------------------ hfs */
+
+  function hfsBaseUrl(status) {
+    const configuredUrl = status && status.url;
+    if (configuredUrl && configuredUrl.indexOf("127.0.0.1") === -1) return configuredUrl;
+    const host = location.hostname || "127.0.0.1";
+    return "http://" + host + ":" + (status.port || 4323) + "/";
+  }
+
+  function renderHfs(status) {
+    const configured = !!status.configured;
+    const running = !!status.running;
+    const statusEl = $("#hfsStatus");
+    if (statusEl) {
+      statusEl.textContent = !configured
+        ? "未配置 hfs_exe"
+        : running
+          ? "运行中" + (status.managed ? "" : "（外部启动）")
+          : "未运行";
+    }
+    const startBtn = $("#hfsStart");
+    const stopBtn = $("#hfsStop");
+    const openBtn = $("#hfsOpen");
+    if (startBtn) startBtn.disabled = !configured || running;
+    if (stopBtn) stopBtn.disabled = !running;
+    if (openBtn) openBtn.disabled = !running;
+    const frame = $("#hfsFrame");
+    const hint = $("#hfsHint");
+    if (!frame || !hint) return;
+    if (configured && running) {
+      const url = hfsBaseUrl(status);
+      frame.dataset.url = url;
+      if (frame.getAttribute("src") !== url) frame.setAttribute("src", url);
+      frame.classList.remove("hidden");
+      hint.classList.add("hidden");
+    } else {
+      frame.setAttribute("src", "about:blank");
+      frame.classList.add("hidden");
+      hint.classList.remove("hidden");
+      hint.textContent = configured
+        ? "HFS 未运行，点击上方「启动」。"
+        : "未配置 HFS：在 config.json 中将 \"hfs_exe\" 设为 hfs.exe 的完整路径，然后重启后端服务。";
+    }
+  }
+
+  async function loadHfsPage() {
+    try {
+      renderHfs(await API.get("/api/hfs/status"));
+    } catch (e) {
+      UI.toast(e.message);
+    }
+  }
+
+  async function hfsStart() {
+    try {
+      const status = await API.post("/api/hfs/start");
+      renderHfs(status);
+      if (status.running) {
+        setTimeout(() => {
+          const frame = $("#hfsFrame");
+          if (frame) frame.setAttribute("src", hfsBaseUrl(status));
+        }, 800);
+      }
+      UI.toast("已启动 HFS");
+    } catch (e) {
+      UI.alert(e.message);
+    }
+  }
+
+  async function hfsStop() {
+    try {
+      renderHfs(await API.post("/api/hfs/stop"));
+      UI.toast("已停止 HFS");
+    } catch (e) {
+      UI.alert(e.message);
+    }
+  }
+
+  function hfsOpen() {
+    const frame = $("#hfsFrame");
+    const url = frame && frame.dataset.url;
+    if (url) window.open(url, "_blank");
+  }
+
+  function hfsRefresh() {
+    const frame = $("#hfsFrame");
+    if (frame && !frame.classList.contains("hidden") && frame.dataset.url) {
+      frame.setAttribute("src", "about:blank");
+      setTimeout(() => frame.setAttribute("src", frame.dataset.url), 100);
+    }
+    loadHfsPage();
+  }
 
   async function renderTasksPage() {
     let data;
@@ -2333,6 +2428,11 @@
     $("#setTranscode").checked = !!data.transcode;
     $("#setTranscodeEncoder").value = data.transcode_encoder || "auto";
     $("#setAccessLog").checked = !!data.access_log;
+    $("#setHfsExe").value = data.hfs_exe || "";
+    $("#setHfsUrl").value = data.hfs_url || "";
+    $("#setHfsVfs").value = data.hfs_vfs || "";
+    $("#setHfsArgs").value = data.hfs_args || "";
+    $("#setHfsAutostart").checked = !!data.hfs_autostart;
     $("#setDataDir").textContent = data.data_dir;
     $("#setConfigFile").textContent = data.config_file;
     $("#setToolStatus").textContent = data.ffmpeg_resolved
@@ -2421,6 +2521,11 @@
         transcode: $("#setTranscode").checked,
         transcode_encoder: $("#setTranscodeEncoder").value,
         access_log: $("#setAccessLog").checked,
+        hfs_exe: $("#setHfsExe").value.trim(),
+        hfs_url: $("#setHfsUrl").value.trim(),
+        hfs_vfs: $("#setHfsVfs").value.trim(),
+        hfs_args: $("#setHfsArgs").value.trim(),
+        hfs_autostart: $("#setHfsAutostart").checked,
       });
       await refreshConfig();
       await refreshTranscodeInfo();
@@ -2904,6 +3009,15 @@
       if (e.key === "Enter") createTag();
     });
     $("#tasksRefresh").addEventListener("click", renderTasksPage);
+
+    const hfsStartBtn = $("#hfsStart");
+    if (hfsStartBtn) hfsStartBtn.addEventListener("click", hfsStart);
+    const hfsStopBtn = $("#hfsStop");
+    if (hfsStopBtn) hfsStopBtn.addEventListener("click", hfsStop);
+    const hfsOpenBtn = $("#hfsOpen");
+    if (hfsOpenBtn) hfsOpenBtn.addEventListener("click", hfsOpen);
+    const hfsRefreshBtn = $("#hfsRefresh");
+    if (hfsRefreshBtn) hfsRefreshBtn.addEventListener("click", hfsRefresh);
 
     $("#recentRefresh").addEventListener("click", refreshRecent);
     $("#recentClear").addEventListener("click", async () => {

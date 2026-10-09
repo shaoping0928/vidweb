@@ -290,6 +290,19 @@ body {
   display: flex;
 }
 
+.hfs-frame {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  border: 0;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.hfs-frame.hidden {
+  display: none;
+}
+
 #statusbar {
   flex: 0 0 auto;
   height: 24px;

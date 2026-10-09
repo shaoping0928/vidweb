@@ -38,6 +38,10 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
         <span>任务</span>
       </button>
+      <button class="tab" data-tab="hfs" title="文件共享">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/><polyline points="7 9 12 4 17 9"/><line x1="12" y1="4" x2="12" y2="16"/></svg>
+        <span>文件</span>
+      </button>
       <button class="tab" data-tab="settings" title="设置">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
         <span>设置</span>
@@ -202,6 +206,19 @@
       <div class="pager" id="tasksPager"></div>
     </section>
 
+    <section id="page-hfs" class="page">
+      <div class="toolbar">
+        <button id="hfsStart">启动</button>
+        <button id="hfsStop">停止</button>
+        <button id="hfsOpen">新窗口打开</button>
+        <button id="hfsRefresh">刷新</button>
+        <span class="spacer"></span>
+        <span class="label" id="hfsStatus"></span>
+      </div>
+      <div id="hfsHint" class="empty-hint"></div>
+      <iframe id="hfsFrame" class="hfs-frame" title="HFS 文件共享"></iframe>
+    </section>
+
     <section id="page-settings" class="page">
       <div class="settings-scroll">
         <div class="settings-card">
@@ -253,6 +270,26 @@
           <div class="settings-subtitle">日志</div>
           <label class="check"><input type="checkbox" id="setAccessLog">在控制台显示访问日志（每个请求一行）</label>
           <div class="settings-hint">关闭后控制台只保留启动信息与错误；修改保存后立即生效。</div>
+
+          <div class="settings-subtitle">文件共享（HFS）</div>
+          <div class="settings-row">
+            <label>hfs.exe</label>
+            <input id="setHfsExe" class="grow-input" placeholder="hfs.exe 完整路径，留空则关闭该功能">
+          </div>
+          <div class="settings-row">
+            <label>下载地址</label>
+            <input id="setHfsUrl" class="grow-input" placeholder="留空则按 hfs.ini 的端口自动生成">
+          </div>
+          <div class="settings-row">
+            <label>VFS 配置</label>
+            <input id="setHfsVfs" class="grow-input" placeholder="可选：启动时加载的 .vfs（决定共享哪些目录）">
+          </div>
+          <div class="settings-row">
+            <label>额外参数</label>
+            <input id="setHfsArgs" class="grow-input" placeholder="可选：传给 hfs.exe 的命令行参数">
+          </div>
+          <label class="check"><input type="checkbox" id="setHfsAutostart">后端启动时自动启动 HFS</label>
+          <div class="settings-hint">在「文件共享」页启动/停止 HFS，并直接在其界面里上传、下载文件（不限类型）。共享目录、端口、账号等在 HFS 自身界面或 hfs.ini 中配置。</div>
 
           <div class="settings-actions">
             <button id="setServerSave" class="primary">保存服务器设置</button>
