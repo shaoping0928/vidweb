@@ -105,6 +105,12 @@ def plan(path: str) -> dict:
     probed = media_info.streams(path) or {}
     video = probed.get("video", "")
     audio = probed.get("audio", "")
+    if not video and audio:
+        return {
+            "mode": "audio",
+            "video": "",
+            "audio": audio,
+        }
     return {
         "mode": "remux" if video in REMUX_VIDEO_CODECS else "transcode",
         "video": video,
@@ -118,7 +124,9 @@ def stream(path: str, start_ms: int = 0, plan_info: dict = None):
         raise RuntimeError("未检测到 ffmpeg")
     probed = plan_info or plan(path)
     audio = probed.get("audio", "")
-    remux = probed.get("mode") == "remux"
+    mode = probed.get("mode")
+    remux = mode == "remux"
+    audio_mode = mode == "audio"
     start_s = max(0, int(start_ms)) / 1000.0
     cmd = [
         ffmpeg, "-hide_banner", "-loglevel", "error",
@@ -129,6 +137,8 @@ def stream(path: str, start_ms: int = 0, plan_info: dict = None):
     ]
     if remux:
         cmd += ["-c:v", "copy"]
+    elif audio_mode:
+        cmd += ["-vn"]
     else:
         cmd += [*_encoder_args(resolve_encoder()), "-pix_fmt", "yuv420p", "-g", "48"]
     if audio == "aac":

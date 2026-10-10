@@ -54,6 +54,9 @@ def _probe_broken(path: str):
     info = media_info.streams(path)
     if not info:
         return True
+    suffix = os.path.splitext(path)[1].lstrip(".").lower()
+    if suffix in config.AUDIO_EXTS:
+        return not info.get("audio")
     return not info.get("video")
 
 

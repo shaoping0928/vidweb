@@ -255,6 +255,7 @@
       search: "",
       statuses: [],
       durations: [],
+      media: "all",
       folderFilter: true,
       sort: "name",
       tagMode: "any",
@@ -293,6 +294,10 @@
     $$("input.pl-duration").forEach((box) => {
       box.checked = box.value === "all" ? durations.length === 0 : durations.includes(box.value);
     });
+    const mediaBox = document.querySelector(
+      'input[name="plMedia"][value="' + (state.libFilters.media || "all") + '"]'
+    );
+    if (mediaBox) mediaBox.checked = true;
     const mode = document.querySelector(
       'input[name="plTagMode"][value="' + (state.libFilters.tagMode || "any") + '"]'
     );
@@ -581,10 +586,24 @@
 
   /* ------------------------------------------------------------ thumbnails */
 
+  const AUDIO_EXTS = new Set([
+    "mp3", "flac", "wav", "wave", "aac", "m4a", "m4b", "ogg", "oga", "opus",
+    "wma", "ape", "alac", "aiff", "aif", "ac3", "eac3", "dts", "mka", "amr",
+    "wv", "tta",
+  ]);
+
+  function isAudioPath(path) {
+    const base = String(path || "").split(/[\\/]/).pop() || "";
+    const index = base.lastIndexOf(".");
+    return index > 0 && AUDIO_EXTS.has(base.slice(index + 1).toLowerCase());
+  }
+
   function bindThumb(container, path, hasThumb) {
     const img = container.querySelector("img.thumb-img");
     if (!img) return;
-    const available = hasThumb || state.config.ffmpeg;
+    const isAudio = isAudioPath(path);
+    if (isAudio) container.classList.add("audio");
+    const available = hasThumb || (state.config.ffmpeg && !isAudio);
     if (!available) return;
     let tries = 0;
     const attempt = () => {
@@ -592,7 +611,7 @@
     };
     img.onload = () => container.classList.add("has-thumb");
     img.onerror = () => {
-      if (container.isConnected && !hasThumb && state.config.ffmpeg && tries++ < 90) {
+      if (!isAudio && container.isConnected && !hasThumb && state.config.ffmpeg && tries++ < 90) {
         setTimeout(attempt, 2000);
       }
     };
@@ -610,7 +629,7 @@
     img.alt = "";
     const placeholder = document.createElement("div");
     placeholder.className = "thumb-ph";
-    placeholder.textContent = "无缩略图";
+    placeholder.textContent = isAudioPath(options.path) ? "音频" : "无缩略图";
     const play = document.createElement("button");
     play.className = "card-play";
     play.title = "播放";
@@ -1212,6 +1231,7 @@
       search: "",
       statuses: [],
       durations: [],
+      media: "all",
       folderFilter: true,
       sort: "name",
       tagMode: "any",
@@ -1242,6 +1262,7 @@
           statuses: [],
           duration: "all",
           durations: [],
+          media: "all",
           tag_ids: [],
           tag_match_all: false,
           sort,
@@ -1258,6 +1279,7 @@
         statuses,
         duration: durations.length === 1 ? durations[0] : "all",
         durations,
+        media: state.libFilters.media || "all",
         tag_ids: selectedTagIds(),
         tag_match_all: state.libFilters.tagMode === "all",
         sort,
@@ -1659,6 +1681,7 @@
       statuses,
       duration: durations.length === 1 ? durations[0] : "all",
       durations,
+      media: state.libFilters.media || "all",
       folderFilter: state.libFilters.folderFilter !== false,
       tagNames: (state.libFilters.tagNames || []).slice(),
       tagMode: state.libFilters.tagMode || "any",
@@ -1701,6 +1724,8 @@
     if (durationList.length) {
       parts.push(durationList.map((d) => durationNames[d] || d).join(" / "));
     }
+    if (f.media === "video") parts.push("视频");
+    if (f.media === "audio") parts.push("音频");
     const tagNames = f.tagNames || [];
     if (tagNames.length) {
       parts.push("标签: " + tagNames.join(f.tagMode === "all" ? " + " : " / "));
@@ -1777,6 +1802,7 @@
         ? [filters.duration]
         : [];
     state.libFilters.folderFilter = filters.folderFilter !== false;
+    state.libFilters.media = filters.media === "video" || filters.media === "audio" ? filters.media : "all";
     state.libFilters.tagNames = (filters.tagNames || []).slice();
     state.libFilters.tagMode = filters.tagMode === "all" ? "all" : "any";
     state.libFilters.sort = filters.sort || "name";
@@ -2967,6 +2993,14 @@
     $$('input[name="plTagMode"]').forEach((radio) =>
       radio.addEventListener("change", () => {
         state.libFilters.tagMode = radio.value;
+        clearActiveCollection();
+        saveLibFilters();
+        refreshPlaylistView(true);
+      })
+    );
+    $$('input[name="plMedia"]').forEach((radio) =>
+      radio.addEventListener("change", () => {
+        state.libFilters.media = radio.value;
         clearActiveCollection();
         saveLibFilters();
         refreshPlaylistView(true);

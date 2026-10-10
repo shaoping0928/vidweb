@@ -71,6 +71,8 @@ def app_config():
         "default_m3u": str(config.PLAYLIST_DIR / "playlist.m3u"),
         "default_thumb_batch": True,
         "video_exts": sorted(config.VIDEO_EXTS),
+        "audio_exts": sorted(config.AUDIO_EXTS),
+        "media_exts": sorted(config.MEDIA_EXTS),
     }
 
 

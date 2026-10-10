@@ -90,6 +90,7 @@ def _generate(path: str) -> None:
     ffmpeg = config.ffmpeg_path()
     if not ffmpeg:
         raise RuntimeError("ffmpeg not found")
+    is_audio = Path(path).suffix.lstrip(".").lower() in config.AUDIO_EXTS
     info = media_info.probe(path) or {}
     duration = info.get("duration_ms") or 0
     if duration > 0:
@@ -115,6 +116,11 @@ def _generate(path: str) -> None:
         run(0.1, out)
     file_id = db.ensure_file(path)
     if not out.exists() or out.stat().st_size <= 0:
+        if is_audio:
+            db.set_broken(file_id, False)
+            with _failed_lock:
+                _failed.add(path)
+            return
         db.set_broken(file_id, True)
         raise RuntimeError("ffmpeg produced no frame")
     db.set_broken(file_id, False)

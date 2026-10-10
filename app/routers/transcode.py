@@ -24,6 +24,9 @@ def transcode_plan(path: str):
     if result["mode"] == "remux":
         result["encoder"] = "copy"
         result["encoder_label"] = "直通（仅重封装）"
+    elif result["mode"] == "audio":
+        result["encoder"] = "audio"
+        result["encoder_label"] = "音频转码（AAC）"
     else:
         encoder = transcode.resolve_encoder()
         result["encoder"] = encoder
@@ -42,9 +45,10 @@ def transcode_stream(path: str, start: int = 0):
         raise HTTPException(status_code=400, detail="未检测到 ffmpeg")
     plan_info = transcode.plan(str(real))
     generator = transcode.stream(str(real), start, plan_info)
+    media_type = "audio/mp4" if plan_info["mode"] == "audio" else "video/mp4"
     return StreamingResponse(
         generator,
-        media_type="video/mp4",
+        media_type=media_type,
         headers={
             "Cache-Control": "no-store",
             "X-Accel-Buffering": "no",

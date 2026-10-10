@@ -1,6 +1,18 @@
 (function () {
   "use strict";
 
+  const AUDIO_EXTS = new Set([
+    "mp3", "flac", "wav", "wave", "aac", "m4a", "m4b", "ogg", "oga", "opus",
+    "wma", "ape", "alac", "aiff", "aif", "ac3", "eac3", "dts", "mka", "amr",
+    "wv", "tta",
+  ]);
+
+  function isAudioPath(path) {
+    const base = String(path || "").split(/[\\/]/).pop() || "";
+    const index = base.lastIndexOf(".");
+    return index > 0 && AUDIO_EXTS.has(base.slice(index + 1).toLowerCase());
+  }
+
   const Player = {
     paths: [],
     index: -1,
@@ -541,6 +553,7 @@
       this.playbackChecked = true;
       const path = this.paths[this.index];
       if (!path) return;
+      if (isAudioPath(path)) return;
       if (!this.transcodeOn) {
         try {
           const cfg = await API.get("/api/config");

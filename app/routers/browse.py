@@ -30,6 +30,8 @@ def _entry(child: Path) -> dict:
         "path": str(child),
         "isdir": is_dir,
         "is_video": (not is_dir) and suffix in config.VIDEO_EXTS,
+        "is_audio": (not is_dir) and suffix in config.AUDIO_EXTS,
+        "is_media": (not is_dir) and suffix in config.MEDIA_EXTS,
         "size": size,
         "mtime": mtime,
         "has_thumb": False,

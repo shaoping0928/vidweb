@@ -6,7 +6,7 @@
 
 | 模块 | 说明 |
 | --- | --- |
-| 媒体库 | 目录扫描入库、卡片网格 / 树形两种视图、按目录 / 标签 / 状态 / 时长 / 分辨率筛选、排序与分页 |
+| 媒体库 | 目录扫描入库（视频 + 音频：mkv/m2ts/ts/vob/rmvb/iso、mp3/flac/wav/ape/ac3/dts 等）、卡片网格 / 树形两种视图、按目录 / 类型 / 标签 / 状态 / 时长 / 分辨率筛选、排序与分页 |
 | 树形浏览 | 从盘符根开始懒加载，只显示含库内视频的目录链（纯 DB 查询，秒开） |
 | 搜索 / 最近 | 按名称搜索；最近播放记录，可清空 |
 | 标签 | 层级标签树（默认根标签「全部标签」，父标签包含子标签）、标签颜色、批量打标、按标签筛选 |
@@ -106,7 +106,7 @@ SQLite（WAL），`data/media.db`，通过 `PRAGMA user_version` 迁移，当前
 | --- | --- |
 | 浏览 | `GET /browse`、`GET /drives`、`POST /explore` |
 | 扫描 | `POST /scan`、`GET /scan/status`、`POST /scan/cancel` |
-| 视频库 | `POST /playlist/query`（flat / folder / tree / paths_only，`status`/`statuses`、`duration`/`durations` 多选并集；tree 忽略筛选、folder 应用筛选）、`GET|PUT|DELETE /playlist`、`POST /playlist/add|remove|clean|restore`、`POST /playlist/filter` |
+| 视频库 | `POST /playlist/query`（flat / folder / tree / paths_only，`status`/`statuses`、`duration`/`durations` 多选并集，`media` 全部/视频/音频；tree 忽略筛选、folder 应用筛选）、`GET|PUT|DELETE /playlist`、`POST /playlist/add|remove|clean|restore`、`POST /playlist/filter` |
 | 文件 | `GET /files/detail|probe|all`、`POST /files/info|progress|played|media_info|detect_broken`、`POST /playlist/save|load` |
 | 标签 | `GET|POST /tags`、`PUT|DELETE /tags/{id}`、`GET /tags/{id}/files`、`GET|PUT /files/tags`、`POST /files/tags/common|batch` |
 | 合集 | `GET|POST /collections`、`GET /collections/counts`、`PUT|DELETE /collections/{id}` |
@@ -129,6 +129,7 @@ SQLite（WAL），`data/media.db`，通过 `PRAGMA user_version` 迁移，当前
 1. **direct**：浏览器可直接播放（H.264/VP9/AV1 + AAC/MP3 等），直接返回原文件（支持 Range）。
 2. **remux**：编码兼容但容器/音轨不合适，用 ffmpeg `-c:v copy` 重封装为 fMP4 直推流。
 3. **transcode**：视频编码不兼容（如 HEVC/10bit 且浏览器不支持）或用户强制开启时，零磁盘 fMP4 实时转码（`GET /api/transcode/stream?path=&start=`），`-g 48` 保证 seek 快速起播；客户端断开即终止 ffmpeg 进程。
+4. **audio**：纯音频文件（无视频流）走音频转码，仅输出 AAC 音频（`-vn`），浏览器不支持的原音频编码（WMA/APE/AC3/DTS 等）自动转码。
 
 - 编码器探测：`GET /api/transcode/info` 检测可用的 nvenc / qsv / amf，设置页提供下拉选择与测试。
 - 坏片段容错：ffmpeg 以 `-err_detect ignore_err` + `-fflags +discardcorrupt` 丢弃损坏包继续转码；若仍中断，播放器自动从当前位置 +8s 跳过损坏片段（最多 4 次），流被提前截断同样触发；多次失败后保留流模式，拖动进度条即可从新位置重试。

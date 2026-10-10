@@ -21,7 +21,7 @@ def scan_videos(root, cancel_check=None) -> list:
             if cancel_check and checked % 200 == 0 and cancel_check():
                 raise ScanCancelled()
             suffix = Path(filename).suffix.lstrip(".").lower()
-            if suffix not in config.VIDEO_EXTS:
+            if suffix not in config.MEDIA_EXTS:
                 continue
             full = str(Path(dirpath) / filename)
             key = normalize_key(full)

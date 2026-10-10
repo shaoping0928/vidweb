@@ -8,11 +8,18 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from .. import db
+from .. import config, db
 from ..security import safe_path
 from ..services import scanjobs, thumbs
 
 router = APIRouter(prefix="/api")
+
+
+def _suffix(path: str) -> str:
+    name = str(path or "")
+    if "." not in name.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]:
+        return ""
+    return name.rsplit(".", 1)[-1].lower()
 
 
 class PathBody(BaseModel):
@@ -40,6 +47,7 @@ class PlaylistQuery(BaseModel):
     statuses: Optional[list] = None
     duration: str = "all"
     durations: Optional[list] = None
+    media: str = "all"
     tag_ids: list = []
     tag_match_all: bool = False
     sort: str = "name"
@@ -252,6 +260,7 @@ def _item_payload(entry: dict) -> dict:
         "play_count": entry["play_count"],
         "last_played_at": entry["last_played_at"],
         "broken": bool(entry.get("broken")),
+        "kind": "audio" if _suffix(entry["path"]) in config.AUDIO_EXTS else "video",
         "tags": entry["tags"],
         "has_thumb": thumbs.cached(entry["path"]) is not None,
     }
@@ -340,6 +349,7 @@ def _build_tree(entries: list) -> list:
 
 def _filter_entries(entries: list, body: PlaylistQuery) -> list:
     keyword = (body.search or "").strip().lower()
+    media = (body.media or "all").strip().lower()
     tag_sets = []
     if body.tag_ids:
         for tag_id in body.tag_ids:
@@ -393,6 +403,12 @@ def _filter_entries(entries: list, body: PlaylistQuery) -> list:
             continue
         if not matches_duration(entry):
             continue
+        if media != "all":
+            is_audio = _suffix(entry["path"]) in config.AUDIO_EXTS
+            if media == "audio" and not is_audio:
+                continue
+            if media == "video" and is_audio:
+                continue
         if tag_sets:
             own = entry["_tag_ids"]
 

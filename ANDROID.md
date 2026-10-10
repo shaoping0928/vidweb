@@ -26,7 +26,7 @@
 ### 2.2 视频库
 
 - 筛选条件（服务端 `POST /api/playlist/query` 统一处理）：
-  - 文件名关键字、状态（全部/未播放/有进度/已播放/失效/损坏，可多选并集；不选=全部但排除失效）、时长（≤10min / 10–30min / >30min / 未知，可多选并集）
+  - 文件名关键字、类型（全部/视频/音频，`media`）、状态（全部/未播放/有进度/已播放/失效/损坏，可多选并集；不选=全部但排除失效）、时长（≤10min / 10–30min / >30min / 未知，可多选并集）
   - 标签多选 + 任一/全部匹配、排序（名称↑↓、最近播放、播放次数、时长、大小、修改时间）
   - 树形模式（`tree: true`，按文件夹层级懒加载，不分页）：树结构与数量**不受筛选影响**（文件夹始终显示），打开文件夹（`folder: "路径"`）时才对其中视频应用筛选；客户端可开关「打开文件夹时应用筛选」
 - 智能合集侧栏（`GET /api/collections`）：应用筛选、重命名、用当前筛选更新、删除；保存当前筛选（`POST /api/collections`）。
@@ -81,7 +81,8 @@
    - 仅容器/音轨问题 → 可考虑本地直接播，或仍用服务端 remux；
    - 不可解或损坏 → 用 `/api/transcode/stream`。
 4. 流式转码模式的 seek = 重新请求 `&start=目标毫秒`（Web 即如此）；时长取本地记录的 `duration_ms`，进度 = `start + 播放器内相对位置`。
-5. **音频兼容性**：服务端转码流统一输出 AAC（源为 AAC 时直接 copy，否则转码）；客户端直连前应检查设备音频解码能力（`MediaCodecList` 按 MIME 查询），AC3/DTS/TrueHD 等不支持时直接走转码流，避免 ExoPlayer 静默丢弃音频轨导致「有画面没声音」。Android 1.1.7 已实现。
+5. **音频兼容性**：服务端转码流统一输出 AAC（源为 AAC 时直接 copy，否则转码）；纯音频文件走 `mode: "audio"`（仅音频、`-vn`）。客户端直连前应检查设备音频解码能力（`MediaCodecList` 按 MIME 查询），AC3/DTS/TrueHD 等不支持时直接走转码流，避免 ExoPlayer 静默丢弃音频轨导致「有画面没声音」。Android 1.1.7 已实现。
+6. **格式范围**：后端扫描 `MEDIA_EXTS`（视频 + 音频）；视频含 mkv/m2ts/mts/ts/tp/vob/rmvb/3gp/asf/mxf/iso 等，音频含 mp3/flac/wav/aac/m4a/ogg/opus/wma/ape/alac/ac3/dts 等。纯音频不生成缩略图、不参与损坏判定、不触发无帧看门狗。
 
 ### 3.2 控制栏
 
@@ -178,6 +179,7 @@
 {
   "offset": 0, "limit": 30,
   "search": "", "status": "all", "statuses": null, "duration": "all", "durations": null,
+  "media": "all",
   "tag_ids": [], "tag_match_all": false,
   "sort": "name",
   "paths_only": false, "tree": false, "folder": null

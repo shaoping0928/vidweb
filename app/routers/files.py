@@ -99,8 +99,22 @@ def stream(path: str, request: Request):
 
 
 BROWSER_VIDEO_CODECS = {"h264", "vp8", "vp9", "av1"}
-BROWSER_AUDIO_CODECS = {"aac", "mp3", "opus", "vorbis", "flac"}
-BROWSER_CONTAINERS = {"mov,mp4,m4a,3gp,3g2,mj2", "webm"}
+BROWSER_AUDIO_CODECS = {"aac", "mp3", "opus", "vorbis", "flac", "alac"}
+BROWSER_CONTAINERS = {"mov,mp4,m4a,3gp,3g2,mj2", "webm", "matroska,webm"}
+BROWSER_AUDIO_CONTAINERS = {
+    "mp3",
+    "flac",
+    "ogg",
+    "wav",
+    "aac",
+    "mov,mp4,m4a,3gp,3g2,mj2",
+    "webm",
+    "matroska,webm",
+}
+
+
+def _browser_audio_ok(audio: str) -> bool:
+    return (not audio) or audio in BROWSER_AUDIO_CODECS or audio.startswith("pcm_")
 
 
 @router.get("/files/probe")
@@ -112,11 +126,18 @@ def probe_file(path: str):
     container = info.get("container", "")
     if not (video or audio or container):
         return {"video": "", "audio": "", "profile": "", "container": "", "playable": None}
-    playable = (
-        video in BROWSER_VIDEO_CODECS
-        and (not audio or audio in BROWSER_AUDIO_CODECS)
-        and container in BROWSER_CONTAINERS
-    )
+    if video:
+        playable = (
+            video in BROWSER_VIDEO_CODECS
+            and _browser_audio_ok(audio)
+            and container in BROWSER_CONTAINERS
+        )
+    else:
+        playable = (
+            bool(audio)
+            and _browser_audio_ok(audio)
+            and container in BROWSER_AUDIO_CONTAINERS
+        )
     return {
         "video": video,
         "audio": audio,
@@ -147,6 +168,7 @@ def detail(path: str):
         "exists": True,
         "path": str(real),
         "name": real.name,
+        "kind": "audio" if real.suffix.lstrip(".").lower() in config.AUDIO_EXTS else "video",
         "size": st.st_size,
         "mtime": int(st.st_mtime),
         "record": record,
