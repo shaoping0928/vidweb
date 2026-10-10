@@ -142,6 +142,7 @@ SQLite（WAL），`data/media.db`，通过 `PRAGMA user_version` 迁移，当前
 1. 在「设置 → 文件共享（HFS）」填写 `hfs.exe` 路径（留空则关闭该功能），可选填写下载地址、VFS、额外参数与「自动启动」，保存。
 2. 打开左侧「文件」页，点「启动」即可启动 HFS，页面内嵌其界面，可上传、下载、浏览文件；也可「新窗口打开」。
 3. 共享目录、端口、账号密码等在 HFS 自身界面或 `hfs.ini` 中配置；`hfs_url` 留空时会读取 `hfs.ini` 的 `ip` / `port` 自动生成地址。
+4. **加载缓慢修复**：HFS 2.3 自带模板会从 `//ajax.googleapis.com` 加载 jQuery（国内会卡到超时后才回退本地），导致页面打开很慢。解决：改用引用本地 `/?mode=jquery` 的模板文件——把修正后的 `hfs.tpl` 放到 HFS 目录，并在 `hfs.ini` 中设置 `tpl-file=hfs.tpl`（本机已按此修复，模板为官方 2.3 模板 + 中文字符串）。
 
 后端通过 `services/hfs.py` 管理 HFS 子进程（启动 / 停止 / 状态）。该功能依赖 Windows（`hfs.exe`），仅在配置了 `hfs_exe` 时可用。
 
