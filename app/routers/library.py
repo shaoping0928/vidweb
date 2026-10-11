@@ -90,6 +90,11 @@ def scan_status(job_id: str, include_files: int = 0):
         "added": job["added"],
         "playlist_added": job.get("playlist_added", 0),
         "error": job["error"],
+        "incremental": job.get("incremental", False),
+        "dirs_scanned": job.get("dirs_scanned", 0),
+        "found": job.get("found", 0),
+        "skipped": job.get("skipped", 0),
+        "pruned_dirs": job.get("pruned_dirs", 0),
         "elapsed": round((job["finished_at"] or time.time()) - job["started_at"], 1),
     }
     if include_files and job["state"] in ("done", "cancelled"):
@@ -466,10 +471,16 @@ def query_playlist(body: PlaylistQuery):
 
     if body.tree:
         entries = _load_entries_db(db.playlist_entries())
+        keyword = (body.search or "").strip().lower()
+        visible = (
+            [entry for entry in entries if keyword in entry["name"].lower()]
+            if keyword
+            else entries
+        )
         return {
-            "tree": _build_tree(entries),
+            "tree": _build_tree(visible),
             "total": len(entries),
-            "filtered": len(entries),
+            "filtered": len(visible),
         }
 
     entries = _load_playlist_entries(db.playlist_entries())

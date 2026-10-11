@@ -24,6 +24,7 @@ DEFAULTS = {
     "ffprobe": "",
     "transcode": False,
     "transcode_encoder": "auto",
+    "scan_incremental": True,
     "access_log": False,
     "hfs_exe": "",
     "hfs_url": "",

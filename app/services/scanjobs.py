@@ -3,7 +3,7 @@ import threading
 import time
 import uuid
 
-from .. import db
+from .. import config, db
 from . import scanner, thumbs
 from .scan_cancel import ScanCancelled
 
@@ -37,6 +37,11 @@ def start_scan(root: str, ip: str = "", dir_id=None) -> str:
         "error": "",
         "files": [],
         "cancel": False,
+        "dirs_scanned": 0,
+        "found": 0,
+        "skipped": 0,
+        "pruned_dirs": 0,
+        "incremental": True,
         "started_at": time.time(),
         "finished_at": 0,
     }
@@ -65,9 +70,46 @@ def cancel_job(job_id: str) -> bool:
 
 def _run(job: dict):
     try:
-        files = scanner.scan_videos(job["path"], cancel_check=lambda: job["cancel"])
+        incremental = bool(config.load_config().get("scan_incremental", True))
+        job["incremental"] = incremental
+        dir_mtimes = {}
+        file_sigs = {}
+        if incremental:
+            try:
+                dir_mtimes = db.scan_dir_mtimes()
+            except Exception:
+                dir_mtimes = {}
+            try:
+                file_sigs = db.file_signatures()
+            except Exception:
+                file_sigs = {}
+        last_tick = {"t": 0.0}
+
+        def on_progress(dirs_scanned, found):
+            job["dirs_scanned"] = dirs_scanned
+            job["found"] = found
+            now = time.time()
+            if now - last_tick["t"] >= 0.5:
+                last_tick["t"] = now
+                try:
+                    db.update_task(job["id"], state="walking")
+                except Exception:
+                    pass
+
+        result = scanner.scan_media(
+            job["path"],
+            dir_mtimes=dir_mtimes,
+            file_sigs=file_sigs,
+            incremental=incremental,
+            cancel_check=lambda: job["cancel"],
+            on_progress=on_progress,
+        )
         if job["cancel"]:
             raise ScanCancelled()
+        files = result["files"]
+        stats = result.get("stats") or {}
+        job["skipped"] = stats.get("skipped", 0)
+        job["pruned_dirs"] = stats.get("pruned_dirs", 0)
         job["files"] = files
         job["total"] = len(files)
         job["state"] = "importing"
@@ -109,6 +151,11 @@ def _run(job: dict):
         if not dir_id:
             db.backfill_file_dirs()
         job["playlist_added"] = db.playlist_add(files)
+        if incremental and result.get("dir_updates"):
+            try:
+                db.save_scan_dir_mtimes(result["dir_updates"])
+            except Exception:
+                pass
         job["state"] = "done"
         db.finish_task(job["id"], "done", processed=job["processed"], added=job["added"])
     except ScanCancelled:

@@ -918,7 +918,12 @@
       poll: async () => {
         const st = await API.get("/api/scan/status", { job_id: jobId });
         if (st.state === "walking") {
-          return { state: "running", percent: null, text: "正在遍历目录..." };
+          const scanned = st.dirs_scanned || 0;
+          const found = st.found || 0;
+          const text = scanned
+            ? "正在遍历目录… 已扫描 " + scanned + " 个目录，发现 " + found + " 个待入库"
+            : "正在遍历目录...";
+          return { state: "running", percent: null, text: text };
         }
         if (st.state === "importing") {
           return {
@@ -945,7 +950,8 @@
         }
         if (state.tab === "tasks") renderTasksPage();
         const message =
-          "完成：共 " + full.total + " 个，新增入库 " + full.added + " 个，加入列表 " + addedToPlaylist + " 个";
+          "完成：共 " + full.total + " 个，新增入库 " + full.added + " 个，加入列表 " + addedToPlaylist + " 个" +
+          (full.incremental && full.skipped ? "（跳过未变化 " + full.skipped + " 个）" : "");
         UI.toast(message);
         return message;
       },

@@ -202,6 +202,14 @@ def init_db() -> None:
         if version < 10:
             conn.execute("ALTER TABLE files ADD COLUMN broken INTEGER DEFAULT 0")
             conn.execute("PRAGMA user_version = 10")
+        if version < 11:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS scan_dirs ("
+                "  dir_path TEXT PRIMARY KEY,"
+                "  mtime REAL DEFAULT 0"
+                ")"
+            )
+            conn.execute("PRAGMA user_version = 11")
         conn.commit()
     finally:
         conn.close()
@@ -892,6 +900,37 @@ def ensure_files_rel_batch(dir_id, rel_paths) -> int:
                 )
                 added += 1
     return added
+
+
+def scan_dir_mtimes() -> dict:
+    with connection() as conn:
+        rows = conn.execute("SELECT dir_path, mtime FROM scan_dirs").fetchall()
+    return {row["dir_path"]: (row["mtime"] or 0.0) for row in rows}
+
+
+def save_scan_dir_mtimes(items) -> int:
+    count = 0
+    with connection() as conn:
+        for dir_path, mtime in items or []:
+            conn.execute(
+                "INSERT OR REPLACE INTO scan_dirs(dir_path, mtime) VALUES(?,?)",
+                (path_key(dir_path), float(mtime)),
+            )
+            count += 1
+    return count
+
+
+def file_signatures() -> dict:
+    with connection() as conn:
+        rows = conn.execute(
+            "SELECT path, mtime, size FROM files"
+        ).fetchall()
+    signatures = {}
+    for row in rows:
+        if not row["path"]:
+            continue
+        signatures[path_key(row["path"])] = (int(row["mtime"] or 0), int(row["size"] or 0))
+    return signatures
 
 
 def _entry_resolved(row) -> str:
